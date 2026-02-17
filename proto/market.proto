@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package market;
+
+service Feeder {
+  rpc StreamKlines (StreamRequest) returns (stream Kline);
+}
+
+message StreamRequest {
+  repeated string symbols = 1;
+}
+
+message Kline {
+  string symbol = 1;
+  int64 open_time = 2;
+  int64 close_time = 3;
+  double open = 4;
+  double high = 5;
+  double low = 6;
+  double close = 7;
+  double volume = 8;
+}
