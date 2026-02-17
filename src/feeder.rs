@@ -12,4 +12,11 @@ pub trait Feeder: Send + Sync + 'static {
         &self,
         request: StreamRequest,
     ) -> Result<ReceiverStream<Result<Kline, Status>>, Status>;
+
+    async fn historical_klines(
+        &self,
+        symbol: &str,
+        interval: &str,
+        days: u64,
+    ) -> Result<Vec<Kline>, Box<dyn std::error::Error>>;
 }

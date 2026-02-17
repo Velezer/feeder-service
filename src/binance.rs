@@ -1,5 +1,9 @@
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use super::feeder::Feeder;
 use crate::market::{Kline, StreamRequest};
+use reqwest::Client;
+use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_tungstenite::connect_async;
@@ -50,6 +54,54 @@ impl Feeder for BinanceFeeder {
         });
 
         Ok(ReceiverStream::new(rx))
+    }
+
+      async fn historical_klines(
+        &self,
+        symbol: &str,
+        interval: &str,
+        days: u64,
+    ) -> Result<Vec<Kline>, Box<dyn std::error::Error>> {
+        let client = Client::new();
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_millis() as u64;
+
+        let start_time = now - days * 24 * 60 * 60 * 1000;
+
+        let url = format!(
+            "https://api.binance.com/api/v3/klines?symbol={}&interval={}&startTime={}&limit=1000",
+            symbol.to_uppercase(),
+            interval,
+            start_time
+        );
+
+        let response: Vec<Vec<Value>> = client
+            .get(url)
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        let mut klines = Vec::new();
+
+        for entry in response {
+            let kline = Kline {
+                symbol: symbol.to_uppercase(),
+                open_time: entry[0].as_i64().unwrap(),
+                open: entry[1].as_str().unwrap().parse().unwrap(),
+                high: entry[2].as_str().unwrap().parse().unwrap(),
+                low: entry[3].as_str().unwrap().parse().unwrap(),
+                close: entry[4].as_str().unwrap().parse().unwrap(),
+                volume: entry[5].as_str().unwrap().parse().unwrap(),
+                close_time: entry[6].as_i64().unwrap(),
+            };
+
+            klines.push(kline);
+        }
+
+        Ok(klines)
     }
 }
 
