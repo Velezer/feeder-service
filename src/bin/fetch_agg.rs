@@ -13,12 +13,18 @@ struct AggTrade {
 }
 
 fn get_last_trade_id(conn: &Connection, symbol: &str) -> rusqlite::Result<Option<u64>> {
-    conn.query_row(
-        "SELECT MAX(trade_id) FROM agg_trades WHERE symbol = ?1",
-        [symbol],
-        |row| row.get(0),
-    )
-    .optional()
+    // query_row returns Result<T, Error>
+    // optional() converts Result<T, Error> -> Result<Option<T>, Error>
+    let last_id_opt: Option<Option<u64>> = conn
+        .query_row(
+            "SELECT MAX(trade_id) FROM agg_trades WHERE symbol = ?1",
+            [symbol],
+            |row| row.get::<_, Option<u64>>(0), // NULL -> Option<u64>
+        )
+        .optional()?; // now we have Result<Option<Option<u64>>, Error>
+
+    // Flatten Option<Option<u64>> -> Option<u64>
+    Ok(last_id_opt.flatten())
 }
 
 #[tokio::main]
