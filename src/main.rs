@@ -4,8 +4,9 @@ use dotenv::dotenv;
 use futures_util::{StreamExt, SinkExt};
 use serde::Deserialize;
 use simd_json::serde::from_slice;
-use tokio_tungstenite::connect_async;
+use tokio_tungstenite::{connect_async, tungstenite::Message, accept_async};
 use tokio::sync::broadcast;
+use tokio::net::TcpListener;
 use url::Url;
 
 #[derive(Debug, Deserialize)]
@@ -38,7 +39,32 @@ async fn main() {
     // Create a broadcast channel for connected clients
     let (tx, _rx) = broadcast::channel::<String>(1);
 
-    // Binance aggTrade WebSocket
+    // --- Spawn Android listener (non-blocking) ---
+    let tx_listener = tx.clone();
+    tokio::spawn(async move {
+        let listener = TcpListener::bind("0.0.0.0:9001")
+            .await
+            .expect("Failed to bind TCP listener");
+
+        println!("Android WebSocket listener running on port 9001");
+
+        while let Ok((stream, _)) = listener.accept().await {
+            let ws_stream = accept_async(stream)
+                .await
+                .expect("Failed to accept WebSocket");
+
+            let mut rx = tx_listener.subscribe();
+            let (mut ws_sink, _) = ws_stream.split();
+
+            tokio::spawn(async move {
+                while let Ok(msg) = rx.recv().await {
+                    let _ = ws_sink.send(Message::Text(msg)).await;
+                }
+            });
+        }
+    });
+
+    // --- Connect to Binance aggTrade WebSocket ---
     let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@aggTrade").unwrap();
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     println!("Connected to Binance WebSocket");
@@ -89,7 +115,7 @@ async fn main() {
                     // Print locally
                     println!("{}", log_msg);
 
-                    // Broadcast to any subscribed clients (non-blocking)
+                    // Broadcast to any subscribed Android clients (non-blocking)
                     let _ = tx.send(log_msg);
                 }
             }
