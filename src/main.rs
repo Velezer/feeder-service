@@ -1,11 +1,11 @@
 use std::env;
-
 use chrono::{DateTime, FixedOffset, TimeZone, Utc, offset::LocalResult};
 use dotenv::dotenv;
-use futures_util::StreamExt;
+use futures_util::{StreamExt, SinkExt};
 use serde::Deserialize;
 use simd_json::serde::from_slice;
 use tokio_tungstenite::connect_async;
+use tokio::sync::broadcast;
 use url::Url;
 
 #[derive(Debug, Deserialize)]
@@ -35,20 +35,21 @@ async fn main() {
         big_trade_qty, spike_pct
     );
 
+    // Create a broadcast channel for connected clients
+    let (tx, _rx) = broadcast::channel::<String>(1);
+
     // Binance aggTrade WebSocket
     let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@aggTrade").unwrap();
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
-
     println!("Connected to Binance WebSocket");
 
     let mut read = ws_stream;
-
     let mut last_price: Option<f64> = None;
 
     while let Some(msg) = read.next().await {
         if let Ok(msg) = msg {
             if msg.is_text() {
-                let mut bytes = msg.to_text().unwrap().as_bytes().to_vec(); // Vec<u8> is mutable
+                let mut bytes = msg.to_text().unwrap().as_bytes().to_vec();
                 let agg: AggTrade = from_slice(&mut bytes).unwrap();
                 let price: f64 = agg.p.parse().unwrap();
                 let qty: f64 = agg.q.parse().unwrap();
@@ -61,23 +62,21 @@ async fn main() {
 
                 let utc_ts = match Utc.timestamp_millis_opt(agg.T as i64) {
                     LocalResult::Single(dt) => dt,
-                    _ => continue, // invalid timestamp
+                    _ => continue,
                 };
 
-                // Create FixedOffset safely (UTC+7)
                 let offset = match FixedOffset::east_opt(7 * 3600) {
                     Some(fx) => fx,
-                    None => continue, // should not happen
+                    None => continue,
                 };
 
                 let dt_utc7: DateTime<FixedOffset> = utc_ts.with_timezone(&offset);
 
-                // Log only if big trade or spike
                 if qty >= big_trade_qty || spike >= spike_pct {
                     let now_ms = Utc::now().timestamp_millis();
                     let delay_ms = now_ms - agg.T as i64;
 
-                    println!(
+                    let log_msg = format!(
                         "[{}] BTCUSDT - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}, Delay: {} ms",
                         dt_utc7.format("%Y-%m-%d %H:%M:%S"),
                         price,
@@ -86,6 +85,12 @@ async fn main() {
                         agg.m,
                         delay_ms
                     );
+
+                    // Print locally
+                    println!("{}", log_msg);
+
+                    // Broadcast to any subscribed clients (non-blocking)
+                    let _ = tx.send(log_msg);
                 }
             }
         }
