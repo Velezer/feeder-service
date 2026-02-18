@@ -2,6 +2,7 @@
 name = "feeder-service"
 version = "0.1.0"
 edition = "2024"
+default-run = "feeder-service"
 
 [dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
@@ -17,6 +18,10 @@ rusqlite = { version = "0.30", features = ["bundled"] }
 tonic = "0.11"
 prost = "0.12"
 tokio-stream = "0.1"
+url = "2.5.8"
+chrono = "0.4.43"
+simd-json = "0.17.0"
+dotenv = "0.15.0"
 
 [build-dependencies]
 tonic-build = "0.11"

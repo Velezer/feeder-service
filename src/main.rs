@@ -1,58 +1,84 @@
-use tokio_stream::StreamExt;
-use crate::feeder::Feeder;
-use crate::market::StreamRequest;
-use crate::binance::BinanceFeeder;
+use std::env;
 
-mod feeder;
-mod binance;
-pub mod market {
-    tonic::include_proto!("market");
+use chrono::{DateTime, FixedOffset, TimeZone, Utc, offset::LocalResult};
+use dotenv::dotenv;
+use futures_util::StreamExt;
+use serde::Deserialize;
+use simd_json::serde::from_slice;
+use tokio_tungstenite::connect_async;
+use url::Url;
+
+#[derive(Debug, Deserialize)]
+struct AggTrade {
+    p: String, // price
+    q: String, // quantity
+    T: u64,    // timestamp in ms
+    m: bool,   // is_buyer_maker
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // let addr = "0.0.0.0:50051".parse()?;
-    // let feeder = BinanceFeeder;
+async fn main() {
+    dotenv().ok(); // load .env
 
-    // println!("Feeder Service running on {}", addr);
+    let big_trade_qty: f64 = env::var("BIG_TRADE_QTY")
+        .unwrap_or_else(|_| "20".to_string())
+        .parse()
+        .unwrap();
 
-    // Server::builder()
-    //     .add_service(feededr)
-    //     .serve(addr)
-    //     .await?;
+    let spike_pct: f64 = env::var("SPIKE_PCT")
+        .unwrap_or_else(|_| "0.4".to_string())
+        .parse()
+        .unwrap();
 
-    // Ok(())
+    // Binance aggTrade WebSocket
+    let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@aggTrade").unwrap();
+    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
 
-    let feeder = BinanceFeeder;
+    println!("Connected to Binance WebSocket");
 
-    let request = StreamRequest {
-        symbols: vec!["btcusdt".to_string()],
-    };
+    let mut read = ws_stream;
 
-    let mut stream = feeder.stream_klines(request).await?;
+    let mut last_price: Option<f64> = None;
 
-    println!("Listening to Binance klines...\n");
+    while let Some(msg) = read.next().await {
+        if let Ok(msg) = msg {
+            if msg.is_text() {
+                let mut bytes = msg.to_text().unwrap().as_bytes().to_vec(); // Vec<u8> is mutable
+                let agg: AggTrade = from_slice(&mut bytes).unwrap();
+                let price: f64 = agg.p.parse().unwrap();
+                let qty: f64 = agg.q.parse().unwrap();
 
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(kline) => {
-                println!(
-                    "{} | open_time:{} O:{} H:{} L:{} C:{} close_time:{} V:{}",
-                    kline.symbol,
-                    kline.open_time,
-                    kline.open,
-                    kline.high,
-                    kline.low,
-                    kline.close,
-                    kline.close_time,
-                    kline.volume
-                );
-            }
-            Err(e) => {
-                eprintln!("Stream error: {}", e);
+                let spike = last_price
+                    .map(|last| ((price - last).abs() / last) * 100.0)
+                    .unwrap_or(0.0);
+
+                last_price = Some(price);
+
+                let utc_ts = match Utc.timestamp_millis_opt(agg.T as i64) {
+                    LocalResult::Single(dt) => dt,
+                    _ => continue, // invalid timestamp
+                };
+
+                // Create FixedOffset safely (UTC+7)
+                let offset = match FixedOffset::east_opt(7 * 3600) {
+                    Some(fx) => fx,
+                    None => continue, // should not happen
+                };
+
+                let dt_utc7: DateTime<FixedOffset> = utc_ts.with_timezone(&offset);
+
+                // Log only if big trade or spike
+                if qty >= big_trade_qty || spike >= spike_pct {
+                    println!(
+                        "[{}] BTCUSDT - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}",
+                        dt_utc7.format("%Y-%m-%d %H:%M:%S"),
+                        price,
+                        qty,
+                        spike,
+                        agg.m
+                    );
+                }
             }
         }
     }
-
-    Ok(())
 }
