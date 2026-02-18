@@ -1,12 +1,13 @@
-use std::env;
 use chrono::{DateTime, FixedOffset, TimeZone, Utc, offset::LocalResult};
 use dotenv::dotenv;
-use futures_util::{StreamExt, SinkExt};
+use futures_util::{SinkExt, StreamExt};
+use local_ip_address::local_ip;
 use serde::Deserialize;
 use simd_json::serde::from_slice;
-use tokio_tungstenite::{connect_async, tungstenite::Message, accept_async};
-use tokio::sync::broadcast;
+use std::env;
 use tokio::net::TcpListener;
+use tokio::sync::broadcast;
+use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};
 use url::Url;
 
 #[derive(Debug, Deserialize)]
@@ -46,7 +47,9 @@ async fn main() {
             .await
             .expect("Failed to bind TCP listener");
 
-        println!("Android WebSocket listener running on port 9001");
+        let ip = local_ip().unwrap(); // detects local IP
+        let port = 9001;
+        println!("Android WebSocket listener running on ws://{}:{}", ip, port);
 
         while let Ok((stream, _)) = listener.accept().await {
             let ws_stream = accept_async(stream)
