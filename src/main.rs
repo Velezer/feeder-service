@@ -30,6 +30,11 @@ async fn main() {
         .parse()
         .unwrap();
 
+    println!(
+        "Thresholds => Big Trade Qty: {}, Spike %: {}",
+        big_trade_qty, spike_pct
+    );
+
     // Binance aggTrade WebSocket
     let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@aggTrade").unwrap();
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
@@ -69,13 +74,17 @@ async fn main() {
 
                 // Log only if big trade or spike
                 if qty >= big_trade_qty || spike >= spike_pct {
+                    let now_ms = Utc::now().timestamp_millis();
+                    let delay_ms = now_ms - agg.T as i64;
+
                     println!(
-                        "[{}] BTCUSDT - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}",
+                        "[{}] BTCUSDT - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}, Delay: {} ms",
                         dt_utc7.format("%Y-%m-%d %H:%M:%S"),
                         price,
                         qty,
                         spike,
-                        agg.m
+                        agg.m,
+                        delay_ms
                     );
                 }
             }
