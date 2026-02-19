@@ -1,15 +1,16 @@
-use chrono::{DateTime, FixedOffset, TimeZone, Utc, offset::LocalResult};
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use dotenv::dotenv;
 use futures_util::{SinkExt, StreamExt};
 use local_ip_address::local_ip;
 use serde::Deserialize;
 use simd_json::serde::from_slice;
 use std::env;
-use tokio::net::TcpListener;
 use tokio::sync::broadcast;
-use tokio::time::{self, Duration};
-use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};
+use tokio::time::{Duration, interval};
+use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
 use url::Url;
+use warp::Filter;
+use warp::ws::{Message, WebSocket};
 
 #[derive(Debug, Deserialize)]
 struct AggTrade {
@@ -19,10 +20,48 @@ struct AggTrade {
     m: bool,
 }
 
+// Handle individual WebSocket clients
+async fn handle_client(ws: WebSocket, tx: broadcast::Sender<String>) {
+    let (mut ws_tx, mut ws_rx) = ws.split();
+    let mut rx = tx.subscribe();
+    let mut heartbeat = interval(Duration::from_secs(15));
+
+    loop {
+        tokio::select! {
+            // heartbeat ping every 15s
+            _ = heartbeat.tick() => {
+                if let Err(_) = ws_tx.send(Message::ping(vec![])).await {
+                    break;
+                }
+            }
+            // broadcast messages
+            Ok(msg) = rx.recv() => {
+                if let Err(_) = ws_tx.send(Message::text(msg)).await {
+                    break;
+                }
+            }
+            // handle incoming messages
+            Some(Ok(msg)) = ws_rx.next() => {
+            if msg.is_ping() {
+                let _ = ws_tx.send(Message::pong(msg.as_bytes().to_vec())).await;
+            } else if msg.is_close() {
+                let _ = ws_tx.send(Message::close()).await;
+                break;
+            }
+        }
+            // optional: default branch if nothing else is ready
+            // default => { /* can do something here, or just skip */ }
+        }
+    }
+
+    println!("Client disconnected");
+}
+
 #[tokio::main]
 async fn main() {
     dotenv().ok();
 
+    // thresholds
     let big_trade_qty: f64 = env::var("BIG_TRADE_QTY")
         .unwrap_or_else(|_| "20".to_string())
         .parse()
@@ -33,8 +72,10 @@ async fn main() {
         .parse()
         .unwrap();
 
-    let port = env::var("PORT").unwrap_or("9001".to_string());
-    let addr = format!("0.0.0.0:{}", port);
+    let port: u16 = env::var("PORT")
+        .unwrap_or("9001".to_string())
+        .parse()
+        .unwrap();
 
     println!(
         "Thresholds => Big Trade Qty: {}, Spike %: {}",
@@ -42,73 +83,32 @@ async fn main() {
     );
 
     let broadcast_capacity: usize = env::var("BROADCAST_CAPACITY")
-        .unwrap_or_else(|_| "1".to_string())
+        .unwrap_or_else(|_| "16".to_string())
         .parse()
         .expect("BROADCAST_CAPACITY must be a number");
 
-    // Broadcast channel with larger buffer
+    // broadcast channel
     let (tx, _rx) = broadcast::channel::<String>(broadcast_capacity);
 
-    // --- Android listener ---
-    let tx_listener = tx.clone();
-    tokio::spawn(async move {
-        let listener = TcpListener::bind(&addr)
-            .await
-            .expect("Failed to bind TCP listener");
-        let ip = local_ip().unwrap();
-        println!("Android WebSocket listener running on ws://{}:{}", ip, port);
-
-        while let Ok((stream, _)) = listener.accept().await {
-            let ws_stream = accept_async(stream)
-                .await
-                .expect("Failed to accept WebSocket");
-            let mut rx = tx_listener.subscribe();
-            let (mut ws_sink, mut ws_stream) = ws_stream.split();
-
-            // Single task handles heartbeat, broadcast, and ping/pong
-            tokio::spawn(async move {
-                let mut heartbeat = time::interval(Duration::from_secs(15));
-
-                loop {
-                    tokio::select! {
-                        // Heartbeat ping every 15s
-                        _ = heartbeat.tick() => {
-                            if let Err(e) = ws_sink.send(Message::Ping(vec![])).await {
-                                eprintln!("Heartbeat ping failed: {}", e);
-                                break;
-                            }
-                        }
-                        // Broadcast messages to this client
-                        Ok(msg) = rx.recv() => {
-                            if let Err(e) = ws_sink.send(Message::Text(msg)).await {
-                                eprintln!("Failed to send to client: {}", e);
-                                break;
-                            }
-                        }
-                        // Handle incoming messages from client (Ping/Close)
-                        Some(Ok(msg)) = ws_stream.next() => {
-                            match msg {
-                                Message::Ping(p) => {
-                                    let _ = ws_sink.send(Message::Pong(p)).await;
-                                }
-                                Message::Close(_) => {
-                                    let _ = ws_sink.send(Message::Close(None)).await;
-                                    break;
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                }
-
-                println!("Client disconnected");
-            });
+    // Warp WebSocket route
+    let ws_route = warp::path("aggTrade").and(warp::ws()).map({
+        let tx = tx.clone();
+        move |ws: warp::ws::Ws| {
+            let tx_inner = tx.clone();
+            ws.on_upgrade(move |socket| handle_client(socket, tx_inner))
         }
     });
 
-    // --- Connect to Binance aggTrade ---
+    // Spawn warp server
+    let ip = local_ip().unwrap();
+    println!("WebSocket server running on ws://{}:{}/aggTrade", ip, port);
+    tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], port)));
+
+    // Connect to Binance aggTrade
     let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@aggTrade").unwrap();
-    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+    let (ws_stream, _) = connect_async(url)
+        .await
+        .expect("Failed to connect to Binance");
     println!("Connected to Binance WebSocket");
 
     let mut read = ws_stream;
@@ -119,6 +119,7 @@ async fn main() {
             if msg.is_text() {
                 let mut bytes = msg.to_text().unwrap().as_bytes().to_vec();
                 let agg: AggTrade = from_slice(&mut bytes).unwrap();
+
                 let price: f64 = agg.p.parse().unwrap();
                 let qty: f64 = agg.q.parse().unwrap();
 
@@ -127,10 +128,7 @@ async fn main() {
                     .unwrap_or(0.0);
                 last_price = Some(price);
 
-                let utc_ts = match Utc.timestamp_millis_opt(agg.T as i64) {
-                    LocalResult::Single(dt) => dt,
-                    _ => continue,
-                };
+                let utc_ts = Utc.timestamp_millis_opt(agg.T as i64).unwrap();
                 let offset = FixedOffset::east_opt(7 * 3600).unwrap();
                 let dt_utc7: DateTime<FixedOffset> = utc_ts.with_timezone(&offset);
 

@@ -4,7 +4,7 @@ use tokio_tungstenite::tungstenite::Message;
 
 #[tokio::main]
 async fn main() {
-    let url = "ws://localhost:8080";
+    let url = "ws://localhost:8080/aggTrade";
     println!("Connecting to {}", url);
 
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
