@@ -32,6 +32,9 @@ async fn main() {
         .parse()
         .unwrap();
 
+    let port = std::env::var("PORT").unwrap_or("9001".to_string());
+    let addr = format!("0.0.0.0:{}", port);
+
     println!(
         "Thresholds => Big Trade Qty: {}, Spike %: {}",
         big_trade_qty, spike_pct
@@ -43,12 +46,11 @@ async fn main() {
     // --- Spawn Android listener (non-blocking) ---
     let tx_listener = tx.clone();
     tokio::spawn(async move {
-        let listener = TcpListener::bind("0.0.0.0:9001")
+        let listener = TcpListener::bind(addr)
             .await
             .expect("Failed to bind TCP listener");
 
         let ip = local_ip().unwrap(); // detects local IP
-        let port = 9001;
         println!("Android WebSocket listener running on ws://{}:{}", ip, port);
 
         while let Ok((stream, _)) = listener.accept().await {
