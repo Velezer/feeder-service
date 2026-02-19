@@ -7,20 +7,21 @@ use simd_json::serde::from_slice;
 use std::env;
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
+use tokio::time::{self, Duration};
 use tokio_tungstenite::{accept_async, connect_async, tungstenite::Message};
 use url::Url;
 
 #[derive(Debug, Deserialize)]
 struct AggTrade {
-    p: String, // price
-    q: String, // quantity
-    T: u64,    // timestamp in ms
-    m: bool,   // is_buyer_maker
+    p: String,
+    q: String,
+    T: u64,
+    m: bool,
 }
 
 #[tokio::main]
 async fn main() {
-    dotenv().ok(); // load .env
+    dotenv().ok();
 
     let big_trade_qty: f64 = env::var("BIG_TRADE_QTY")
         .unwrap_or_else(|_| "20".to_string())
@@ -32,7 +33,7 @@ async fn main() {
         .parse()
         .unwrap();
 
-    let port = std::env::var("PORT").unwrap_or("9001".to_string());
+    let port = env::var("PORT").unwrap_or("9001".to_string());
     let addr = format!("0.0.0.0:{}", port);
 
     println!(
@@ -40,36 +41,72 @@ async fn main() {
         big_trade_qty, spike_pct
     );
 
-    // Create a broadcast channel for connected clients
-    let (tx, _rx) = broadcast::channel::<String>(1);
+    let broadcast_capacity: usize = env::var("BROADCAST_CAPACITY")
+        .unwrap_or_else(|_| "1".to_string())
+        .parse()
+        .expect("BROADCAST_CAPACITY must be a number");
 
-    // --- Spawn Android listener (non-blocking) ---
+    // Broadcast channel with larger buffer
+    let (tx, _rx) = broadcast::channel::<String>(broadcast_capacity);
+
+    // --- Android listener ---
     let tx_listener = tx.clone();
     tokio::spawn(async move {
-        let listener = TcpListener::bind(addr)
+        let listener = TcpListener::bind(&addr)
             .await
             .expect("Failed to bind TCP listener");
-
-        let ip = local_ip().unwrap(); // detects local IP
+        let ip = local_ip().unwrap();
         println!("Android WebSocket listener running on ws://{}:{}", ip, port);
 
         while let Ok((stream, _)) = listener.accept().await {
             let ws_stream = accept_async(stream)
                 .await
                 .expect("Failed to accept WebSocket");
-
             let mut rx = tx_listener.subscribe();
-            let (mut ws_sink, _) = ws_stream.split();
+            let (mut ws_sink, mut ws_stream) = ws_stream.split();
 
+            // Single task handles heartbeat, broadcast, and ping/pong
             tokio::spawn(async move {
-                while let Ok(msg) = rx.recv().await {
-                    let _ = ws_sink.send(Message::Text(msg)).await;
+                let mut heartbeat = time::interval(Duration::from_secs(15));
+
+                loop {
+                    tokio::select! {
+                        // Heartbeat ping every 15s
+                        _ = heartbeat.tick() => {
+                            if let Err(e) = ws_sink.send(Message::Ping(vec![])).await {
+                                eprintln!("Heartbeat ping failed: {}", e);
+                                break;
+                            }
+                        }
+                        // Broadcast messages to this client
+                        Ok(msg) = rx.recv() => {
+                            if let Err(e) = ws_sink.send(Message::Text(msg)).await {
+                                eprintln!("Failed to send to client: {}", e);
+                                break;
+                            }
+                        }
+                        // Handle incoming messages from client (Ping/Close)
+                        Some(Ok(msg)) = ws_stream.next() => {
+                            match msg {
+                                Message::Ping(p) => {
+                                    let _ = ws_sink.send(Message::Pong(p)).await;
+                                }
+                                Message::Close(_) => {
+                                    let _ = ws_sink.send(Message::Close(None)).await;
+                                    break;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
+
+                println!("Client disconnected");
             });
         }
     });
 
-    // --- Connect to Binance aggTrade WebSocket ---
+    // --- Connect to Binance aggTrade ---
     let url = Url::parse("wss://stream.binance.com:9443/ws/btcusdt@aggTrade").unwrap();
     let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
     println!("Connected to Binance WebSocket");
@@ -88,19 +125,13 @@ async fn main() {
                 let spike = last_price
                     .map(|last| ((price - last).abs() / last) * 100.0)
                     .unwrap_or(0.0);
-
                 last_price = Some(price);
 
                 let utc_ts = match Utc.timestamp_millis_opt(agg.T as i64) {
                     LocalResult::Single(dt) => dt,
                     _ => continue,
                 };
-
-                let offset = match FixedOffset::east_opt(7 * 3600) {
-                    Some(fx) => fx,
-                    None => continue,
-                };
-
+                let offset = FixedOffset::east_opt(7 * 3600).unwrap();
                 let dt_utc7: DateTime<FixedOffset> = utc_ts.with_timezone(&offset);
 
                 if qty >= big_trade_qty || spike >= spike_pct {
@@ -117,10 +148,7 @@ async fn main() {
                         delay_ms
                     );
 
-                    // Print locally
                     println!("{}", log_msg);
-
-                    // Broadcast to any subscribed Android clients (non-blocking)
                     let _ = tx.send(log_msg);
                 }
             }
