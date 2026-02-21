@@ -9,7 +9,6 @@ use std::env;
 use tokio::sync::broadcast;
 use tokio::time::{Duration, interval};
 use tokio_tungstenite::connect_async;
-use url::Url;
 use warp::Filter;
 use warp::ws::{Message, WebSocket};
 
@@ -156,17 +155,18 @@ async fn main() {
     println!("WebSocket server running on ws://{}:{}/aggTrade", ip, port);
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], port)));
 
-    // Build combined stream URL for all symbols
+    // Build combined stream URL for all symbols.
+    // Use a raw string instead of Url::parse to avoid encoding '/' in the query parameter,
+    // which Binance rejects with 415.
     let streams: Vec<String> = configs.iter().map(|c| format!("{}@aggTrade", c.symbol)).collect();
-    let url = Url::parse(&format!(
-        "wss://stream.binance.com:9443/stream?streams={}",
+    let url = format!(
+        "wss://data-stream.binance.vision/stream?streams={}",
         streams.join("/")
-    ))
-    .unwrap();
+    );
 
     println!("Connecting to Binance: {}", url);
 
-    let (ws_stream, _) = connect_async(url)
+    let (ws_stream, _) = connect_async(&url)
         .await
         .expect("Failed to connect to Binance");
     println!("Connected to Binance WebSocket");
