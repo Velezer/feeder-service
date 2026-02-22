@@ -1,9 +1,9 @@
 // File: src/binance.rs
 use crate::config::SymbolConfig;
-use crate::time_helpers::{utc_to_utc7, format_ts};
+use crate::time_helpers::{format_ts, utc_to_utc7};
+use chrono::Utc;
 use simd_json::serde::from_slice;
 use tokio::sync::broadcast;
-use chrono::Utc;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct AggTrade {
@@ -26,7 +26,9 @@ pub fn parse_agg_trade(msg: &str) -> Option<AggTrade> {
 }
 
 pub fn calc_spike(last_price: Option<f64>, current: f64) -> f64 {
-    last_price.map(|last| ((current - last).abs() / last) * 100.0).unwrap_or(0.0)
+    last_price
+        .map(|last| ((current - last).abs() / last) * 100.0)
+        .unwrap_or(0.0)
 }
 
 pub async fn log_and_broadcast(

@@ -1,5 +1,5 @@
 use reqwest::Client;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -50,9 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::new();
 
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis() as u64;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
 
     let one_day_ms = 24 * 60 * 60 * 1000;
     let cutoff_time = now - one_day_ms;
@@ -113,10 +111,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     t.p.parse::<f64>()?,
                     t.q.parse::<f64>()?,
                     t.T,
-                    if t.m { 
+                    if t.m {
                         1 // seller 
                     } else {
-                         0 // buyer 
+                        0 // buyer 
                     }
                 ],
             )?;

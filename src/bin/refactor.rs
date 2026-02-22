@@ -23,8 +23,7 @@ fn main() -> Result<()> {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create directory {:?}", parent))?;
         }
-        fs::write(&path, content)
-            .with_context(|| format!("Failed to write file {:?}", path))?;
+        fs::write(&path, content).with_context(|| format!("Failed to write file {:?}", path))?;
         println!("✅ Wrote {}", path);
     }
 
