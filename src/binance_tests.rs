@@ -8,7 +8,7 @@ fn parse_agg_trade_from_combined_stream() {
     assert_eq!(agg.s, "BTCUSDT");
     assert_eq!(agg.p, "43000.50");
     assert_eq!(agg.q, "0.1200");
-    assert_eq!(agg.T, 1710000000010);
+    assert_eq!(agg.t, 1710000000010);
     assert!(agg.m);
 }
 
