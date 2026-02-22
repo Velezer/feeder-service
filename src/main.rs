@@ -166,7 +166,7 @@ async fn main() {
                 };
 
                 let depth_msg = format!(
-                    "[DEPTH] {} E:{} U:{} u:{} big_bids:[{}] big_asks:[{}]",
+                    "[DEPTH] {} bids:[{}] asks:[{}] E:{} U:{} u:{} big_bids:[{}] big_asks:[{}]",
                     depth.symbol.to_uppercase(),
                     format_depth_levels(&matched_bids),
                     format_depth_levels(&matched_asks),
