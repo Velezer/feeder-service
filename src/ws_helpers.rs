@@ -1,7 +1,7 @@
 // File: src/ws_helpers.rs
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
-use tokio::time::{interval, Duration};
+use tokio::time::{Duration, interval};
 use warp::ws::{Message, WebSocket};
 
 pub type BroadcastRx = broadcast::Receiver<String>;
