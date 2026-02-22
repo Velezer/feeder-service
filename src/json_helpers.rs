@@ -1,4 +1,3 @@
-
 #[derive(Debug, serde::Deserialize)]
 pub struct CombinedStreamMsg<T> {
     pub data: T,
