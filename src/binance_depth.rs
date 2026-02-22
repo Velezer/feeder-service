@@ -63,15 +63,20 @@ pub fn is_big_depth_update(bids: &[ParsedDepthLevel], asks: &[ParsedDepthLevel])
     !bids.is_empty() || !asks.is_empty()
 }
 
-pub fn passes_pressure_filter(bid_pressure_pct: f64, min_pressure_pct: f64) -> bool {
+pub fn passes_pressure_filter(
+    bid_pressure_pct: f64,
+    sell_pressure_pct: f64,
+    min_pressure_pct: f64,
+) -> bool {
     if min_pressure_pct <= 0.0 {
         return true;
     }
 
     let threshold = min_pressure_pct.clamp(0.0, 100.0);
-    let normalized_bid_pressure = bid_pressure_pct.abs().clamp(0.0, 100.0);
+    let bid_pressure = bid_pressure_pct.clamp(0.0, 100.0);
+    let sell_pressure = sell_pressure_pct.clamp(0.0, 100.0);
 
-    normalized_bid_pressure >= threshold || normalized_bid_pressure <= (100.0 - threshold)
+    bid_pressure >= threshold || sell_pressure >= threshold
 }
 
 pub fn format_depth_levels(levels: &[ParsedDepthLevel]) -> String {

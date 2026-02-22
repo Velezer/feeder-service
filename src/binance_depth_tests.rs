@@ -73,20 +73,20 @@ fn is_big_depth_update_requires_any_side_match() {
 
 #[test]
 fn passes_pressure_filter_accepts_balanced_when_disabled() {
-    assert!(passes_pressure_filter(50.0, 0.0));
+    assert!(passes_pressure_filter(50.0, 50.0, 0.0));
 }
 
 #[test]
 fn passes_pressure_filter_requires_directional_imbalance() {
-    assert!(!passes_pressure_filter(52.0, 60.0));
-    assert!(passes_pressure_filter(70.0, 60.0));
-    assert!(passes_pressure_filter(35.0, 60.0));
+    assert!(!passes_pressure_filter(52.0, 48.0, 60.0));
+    assert!(passes_pressure_filter(70.0, 30.0, 60.0));
+    assert!(passes_pressure_filter(35.0, 65.0, 60.0));
 }
 
 #[test]
-fn passes_pressure_filter_handles_negative_pressure_values() {
-    assert!(passes_pressure_filter(-70.0, 60.0));
-    assert!(!passes_pressure_filter(-52.0, 60.0));
+fn passes_pressure_filter_clamps_out_of_range_values() {
+    assert!(passes_pressure_filter(120.0, -20.0, 60.0));
+    assert!(!passes_pressure_filter(-10.0, -5.0, 60.0));
 }
 
 #[test]
