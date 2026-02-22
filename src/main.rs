@@ -137,7 +137,8 @@ async fn main() {
                             let price = level[0].parse::<f64>().ok()?;
                             let qty = level[1].parse::<f64>().ok()?;
 
-                            if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+                            if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0
+                            {
                                 return None;
                             }
 
