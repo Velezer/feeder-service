@@ -1,146 +1,60 @@
-use std::time::{SystemTime, UNIX_EPOCH};
+// File: src/binance.rs
+use crate::config::SymbolConfig;
+use crate::time_helpers::{utc_to_utc7, format_ts};
+use simd_json::serde::from_slice;
+use tokio::sync::broadcast;
+use chrono::Utc;
 
-use super::feeder::Feeder;
-use crate::market::{Kline, StreamRequest};
-use reqwest::Client;
-use serde_json::Value;
-use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_tungstenite::connect_async;
-use futures_util::StreamExt;
-use tonic::Status;
-use serde::Deserialize;
+#[derive(Debug, serde::Deserialize)]
+pub struct AggTrade {
+    pub s: String,
+    pub p: String,
+    pub q: String,
+    pub T: u64,
+    pub m: bool,
+}
 
-pub struct BinanceFeeder;
+#[derive(Debug, serde::Deserialize)]
+struct CombinedStreamMsg {
+    pub data: AggTrade,
+}
 
-#[tonic::async_trait]
-impl Feeder for BinanceFeeder {
-    type StreamKlinesStream = ReceiverStream<Result<Kline, Status>>;
+pub fn parse_agg_trade(msg: &str) -> Option<AggTrade> {
+    let mut bytes = msg.as_bytes().to_vec();
+    let wrapper: CombinedStreamMsg = from_slice(&mut bytes).ok()?;
+    Some(wrapper.data)
+}
 
-    async fn stream_klines(
-        &self,
-        request: StreamRequest,
-    ) -> Result<ReceiverStream<Result<Kline, Status>>, Status> {
-        let symbols = request.symbols;
-        if symbols.is_empty() {
-            return Err(Status::invalid_argument("No symbols provided"));
-        }
+pub fn calc_spike(last_price: Option<f64>, current: f64) -> f64 {
+    last_price.map(|last| ((current - last).abs() / last) * 100.0).unwrap_or(0.0)
+}
 
-        let (tx, rx) = mpsc::channel(100);
+pub async fn log_and_broadcast(
+    tx: &broadcast::Sender<String>,
+    agg: &AggTrade,
+    spike: f64,
+    cfg: &SymbolConfig,
+) {
+    let price: f64 = agg.p.parse().unwrap_or(0.0);
+    let qty: f64 = agg.q.parse().unwrap_or(0.0);
 
-        tokio::spawn(async move {
-            let stream_list: Vec<String> =
-                symbols.iter().map(|s| format!("{}@kline_1m", s.to_lowercase())).collect();
-            let url = format!(
-                "wss://stream.binance.com:9443/stream?streams={}",
-                stream_list.join("/")
-            );
+    if qty >= cfg.big_trade_qty || spike >= cfg.spike_pct {
+        let dt_utc7 = utc_to_utc7(agg.T as i64);
+        let ts_str = format_ts(dt_utc7);
+        let delay_ms = Utc::now().timestamp_millis() - agg.T as i64;
 
-            let (ws_stream, _) = connect_async(url)
-                .await
-                .expect("Failed to connect to Binance WS");
-
-            let (_, mut read) = ws_stream.split();
-
-            while let Some(msg) = read.next().await {
-                if let Ok(msg) = msg {
-                    if msg.is_text() {
-                        if let Ok(kline) = parse_kline(msg.to_text().unwrap()) {
-                            let _ = tx.send(Ok(kline)).await;
-                        }
-                    }
-                }
-            }
-        });
-
-        Ok(ReceiverStream::new(rx))
-    }
-
-      async fn historical_klines(
-        &self,
-        symbol: &str,
-        interval: &str,
-        days: u64,
-    ) -> Result<Vec<Kline>, Box<dyn std::error::Error>> {
-        let client = Client::new();
-
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_millis() as u64;
-
-        let start_time = now - days * 24 * 60 * 60 * 1000;
-
-        let url = format!(
-            "https://api.binance.com/api/v3/klines?symbol={}&interval={}&startTime={}&limit=1000",
-            symbol.to_uppercase(),
-            interval,
-            start_time
+        let log_msg = format!(
+            "[{}] {} - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}, Delay: {} ms",
+            ts_str,
+            agg.s.to_uppercase(),
+            price,
+            qty,
+            spike,
+            agg.m,
+            delay_ms
         );
 
-        let response: Vec<Vec<Value>> = client
-            .get(url)
-            .send()
-            .await?
-            .json()
-            .await?;
-
-        let mut klines = Vec::new();
-
-        for entry in response {
-            let kline = Kline {
-                symbol: symbol.to_uppercase(),
-                open_time: entry[0].as_i64().unwrap(),
-                open: entry[1].as_str().unwrap().parse().unwrap(),
-                high: entry[2].as_str().unwrap().parse().unwrap(),
-                low: entry[3].as_str().unwrap().parse().unwrap(),
-                close: entry[4].as_str().unwrap().parse().unwrap(),
-                volume: entry[5].as_str().unwrap().parse().unwrap(),
-                close_time: entry[6].as_i64().unwrap(),
-            };
-
-            klines.push(kline);
-        }
-
-        Ok(klines)
+        println!("{}", log_msg);
+        let _ = tx.send(log_msg);
     }
-}
-
-// Binance WS JSON structs
-#[derive(Debug, Deserialize)]
-struct BinanceWrapper {
-    data: BinanceKlineWrapper,
-}
-
-#[derive(Debug, Deserialize)]
-struct BinanceKlineWrapper {
-    k: BinanceKline,
-}
-
-#[derive(Debug, Deserialize)]
-struct BinanceKline {
-    s: String,
-    t: i64,
-    #[serde(rename = "T")]
-    close_time: i64,
-    o: String,
-    h: String,
-    l: String,
-    c: String,
-    v: String,
-}
-
-fn parse_kline(text: &str) -> Result<Kline, serde_json::Error> {
-    let wrapper: BinanceWrapper = serde_json::from_str(text)?;
-    let k = wrapper.data.k;
-
-    Ok(Kline {
-        symbol: k.s,
-        open_time: k.t,
-        close_time: k.close_time,
-        open: k.o.parse().unwrap_or(0.0),
-        high: k.h.parse().unwrap_or(0.0),
-        low: k.l.parse().unwrap_or(0.0),
-        close: k.c.parse().unwrap_or(0.0),
-        volume: k.v.parse().unwrap_or(0.0),
-    })
 }
