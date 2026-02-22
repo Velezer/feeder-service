@@ -14,6 +14,19 @@ fn parse_depth_update_from_combined_stream() {
 }
 
 #[test]
+fn parse_depth_level_rejects_non_finite_and_non_positive_values() {
+    let invalid_nan = ["NaN".to_string(), "5.0".to_string()];
+    let invalid_inf = ["24100.10".to_string(), "inf".to_string()];
+    let invalid_zero = ["24100.10".to_string(), "0".to_string()];
+    let invalid_negative = ["-1".to_string(), "1.0".to_string()];
+
+    assert!(parse_depth_level(&invalid_nan).is_none());
+    assert!(parse_depth_level(&invalid_inf).is_none());
+    assert!(parse_depth_level(&invalid_zero).is_none());
+    assert!(parse_depth_level(&invalid_negative).is_none());
+}
+
+#[test]
 fn collect_big_levels_orders_by_notional_and_limits_matches() {
     let levels = vec![
         ["24100.10".to_string(), "1.0".to_string()],

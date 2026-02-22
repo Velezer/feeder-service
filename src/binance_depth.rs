@@ -31,6 +31,11 @@ pub fn parse_depth_update(msg: &str) -> Option<DepthUpdate> {
 pub fn parse_depth_level(level: &[String; 2]) -> Option<ParsedDepthLevel> {
     let price = level[0].parse::<f64>().ok()?;
     let qty = level[1].parse::<f64>().ok()?;
+
+    if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+        return None;
+    }
+
     Some(ParsedDepthLevel {
         price,
         qty,
