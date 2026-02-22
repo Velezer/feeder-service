@@ -1,20 +1,14 @@
 // File: src/main.rs
-mod binance;
-mod binance_depth;
-mod config;
-mod time_helpers;
-mod ws_helpers;
-
-use binance::*;
-use binance_depth::*;
-use config::Config;
+use feeder_service::binance::*;
+use feeder_service::binance_depth::*;
+use feeder_service::config::Config;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use warp::Filter;
-use ws_helpers::*;
+use feeder_service::ws_helpers::*;
 
 #[tokio::main]
 async fn main() {
