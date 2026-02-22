@@ -1,18 +1,14 @@
 // File: src/main.rs
-mod binance;
-mod config;
-mod time_helpers;
-mod ws_helpers;
-
-use binance::*;
-use config::Config;
+use feeder_service::binance::*;
+use feeder_service::binance_depth::*;
+use feeder_service::config::Config;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use warp::Filter;
-use ws_helpers::*;
+use feeder_service::ws_helpers::*;
 
 #[tokio::main]
 async fn main() {
@@ -25,6 +21,8 @@ async fn main() {
 
     let mut config_map = HashMap::new();
     let mut last_prices = HashMap::new();
+    let symbols: Vec<String> = config.symbols.iter().map(|cfg| cfg.symbol.clone()).collect();
+
     for cfg in &config.symbols {
         println!(
             "Symbol: {} => Big Trade Qty: {}, Spike %: {}",
@@ -45,19 +43,22 @@ async fn main() {
             ws.on_upgrade(move |socket| handle_client(socket, tx_inner))
         }
     });
-    let ip = local_ip().unwrap();
+    let ip_display = local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
     println!(
         "WebSocket server running on ws://{}:{}/aggTrade",
-        ip, config.port
+        ip_display, config.port
     );
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
 
-    // Binance connection
-    let streams: Vec<String> = config
-        .symbols
+    // Binance connection (aggTrade + depth)
+    let mut streams: Vec<String> = symbols
         .iter()
-        .map(|c| format!("{}@aggTrade", c.symbol))
+        .map(|symbol| format!("{}@aggTrade", symbol))
         .collect();
+    streams.extend(build_depth_streams(&symbols, 20, 100));
+
     let url = format!(
         "wss://data-stream.binance.vision/stream?streams={}",
         streams.join("/")
@@ -70,20 +71,53 @@ async fn main() {
 
     while let Some(msg) = read.next().await {
         if let Ok(msg) = msg {
-            if msg.is_text() {
-                if let Some(agg) = parse_agg_trade(msg.to_text().unwrap()) {
-                    let symbol = agg.s.to_lowercase();
-                    let cfg = match config_map.get(&symbol) {
-                        Some(c) => c,
-                        None => continue,
-                    };
-                    let spike = calc_spike(
-                        last_prices.get(&symbol).copied(),
-                        agg.p.parse().unwrap_or(0.0),
-                    );
-                    last_prices.insert(symbol.clone(), agg.p.parse().unwrap_or(0.0));
-                    log_and_broadcast(&tx, &agg, spike, cfg).await;
-                }
+            if !msg.is_text() {
+                continue;
+            }
+
+            let payload = match msg.to_text() {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+
+            if let Some(agg) = parse_agg_trade(payload) {
+                let symbol = agg.s.to_lowercase();
+                let cfg = match config_map.get(&symbol) {
+                    Some(c) => c,
+                    None => continue,
+                };
+                let spike = calc_spike(
+                    last_prices.get(&symbol).copied(),
+                    agg.p.parse().unwrap_or(0.0),
+                );
+                last_prices.insert(symbol.clone(), agg.p.parse().unwrap_or(0.0));
+                log_and_broadcast(&tx, &agg, spike, cfg).await;
+                continue;
+            }
+
+            if let Some(depth) = parse_depth_update(payload) {
+                let best_bid = depth
+                    .bids
+                    .first()
+                    .map(|level| format!("{} x {}", level[0], level[1]))
+                    .unwrap_or_else(|| "-".to_string());
+                let best_ask = depth
+                    .asks
+                    .first()
+                    .map(|level| format!("{} x {}", level[0], level[1]))
+                    .unwrap_or_else(|| "-".to_string());
+
+                let depth_msg = format!(
+                    "[DEPTH] {} E:{} U:{} u:{} bid:{} ask:{}",
+                    depth.symbol.to_uppercase(),
+                    depth.event_time,
+                    depth.first_update_id,
+                    depth.final_update_id,
+                    best_bid,
+                    best_ask
+                );
+                println!("{}", depth_msg);
+                let _ = tx.send(depth_msg);
             }
         }
     }

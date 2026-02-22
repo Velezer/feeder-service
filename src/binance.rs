@@ -58,3 +58,7 @@ pub async fn log_and_broadcast(
         let _ = tx.send(log_msg);
     }
 }
+
+#[cfg(test)]
+#[path = "binance_tests.rs"]
+mod tests;
