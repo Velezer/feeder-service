@@ -55,8 +55,8 @@ async fn main() {
         ip_display, config.port
     );
     println!(
-        "Depth filters => min_qty: {}, min_notional: {}",
-        config.big_depth_min_qty, config.big_depth_min_notional
+        "Depth filters => min_qty: {}, min_notional: {}, min_pressure: {}",
+        config.big_depth_min_qty, config.big_depth_min_notional, config.big_depth_min_pressure_pct
     );
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
 
@@ -190,6 +190,10 @@ async fn main() {
                 } else {
                     0.0
                 };
+
+                if !passes_pressure_filter(bid_pressure_pct, config.big_depth_min_pressure_pct) {
+                    continue;
+                }
 
                 let depth_msg = format!(
                     "[DEPTH] {} bids:[{}] asks:[{}] pressure:{:.1}%bid E:{} U:{} u:{} big_bids<{}> big_asks<{}>",
