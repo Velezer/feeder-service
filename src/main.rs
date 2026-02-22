@@ -2,13 +2,13 @@
 use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
 use feeder_service::config::Config;
+use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use warp::Filter;
-use feeder_service::ws_helpers::*;
 
 #[tokio::main]
 async fn main() {
@@ -21,7 +21,11 @@ async fn main() {
 
     let mut config_map = HashMap::new();
     let mut last_prices = HashMap::new();
-    let symbols: Vec<String> = config.symbols.iter().map(|cfg| cfg.symbol.clone()).collect();
+    let symbols: Vec<String> = config
+        .symbols
+        .iter()
+        .map(|cfg| cfg.symbol.clone())
+        .collect();
 
     for cfg in &config.symbols {
         println!(

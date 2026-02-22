@@ -2,7 +2,7 @@
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 
 pub fn utc_to_utc7(ms: i64) -> DateTime<FixedOffset> {
-    let utc_ts = Utc.timestamp_millis_opt(ms).unwrap();  // safe unwrap if you trust timestamps
+    let utc_ts = Utc.timestamp_millis_opt(ms).unwrap(); // safe unwrap if you trust timestamps
     let offset = FixedOffset::east_opt(7 * 3600).unwrap();
     utc_ts.with_timezone(&offset)
 }

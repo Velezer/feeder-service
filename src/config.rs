@@ -18,11 +18,13 @@ pub struct Config {
 impl Config {
     pub fn load() -> Self {
         // Global defaults (optional)
-        let default_qty = env::var("BIG_TRADE_QTY").ok()
+        let default_qty = env::var("BIG_TRADE_QTY")
+            .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(20.0);
 
-        let default_spike = env::var("SPIKE_PCT").ok()
+        let default_spike = env::var("SPIKE_PCT")
+            .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.4);
 
@@ -45,11 +47,13 @@ impl Config {
             .collect();
 
         // Load server config
-        let port = env::var("PORT").ok()
+        let port = env::var("PORT")
+            .ok()
             .and_then(|v| v.parse::<u16>().ok())
             .unwrap_or(9001);
 
-        let broadcast_capacity = env::var("BROADCAST_CAPACITY").ok()
+        let broadcast_capacity = env::var("BROADCAST_CAPACITY")
+            .ok()
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(16);
 
