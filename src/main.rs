@@ -61,7 +61,7 @@ async fn main() {
         .iter()
         .map(|symbol| format!("{}@aggTrade", symbol))
         .collect();
-    streams.extend(build_depth_streams(&symbols, 100));
+    streams.extend(build_diff_depth_streams(&symbols, 100));
 
     let url = format!(
         "wss://data-stream.binance.vision/stream?streams={}",

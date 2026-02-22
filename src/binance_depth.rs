@@ -21,7 +21,14 @@ pub fn parse_depth_update(msg: &str) -> Option<DepthUpdate> {
     parse_combined_data(msg)
 }
 
-pub fn build_depth_streams(symbols: &[String], speed_ms: u16) -> Vec<String> {
+pub fn build_depth_streams(symbols: &[String], levels: u16, speed_ms: u16) -> Vec<String> {
+    symbols
+        .iter()
+        .map(|symbol| format!("{}@depth{}@{}ms", symbol.to_lowercase(), levels, speed_ms))
+        .collect()
+}
+
+pub fn build_diff_depth_streams(symbols: &[String], speed_ms: u16) -> Vec<String> {
     symbols
         .iter()
         .map(|symbol| format!("{}@depth@{}ms", symbol.to_lowercase(), speed_ms))

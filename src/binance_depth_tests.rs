@@ -16,7 +16,21 @@ fn parse_depth_update_from_combined_stream() {
 #[test]
 fn build_depth_stream_names() {
     let symbols = vec!["btcusdt".to_string(), "ETHUSDT".to_string()];
-    let streams = build_depth_streams(&symbols, 100);
+    let streams = build_depth_streams(&symbols, 20, 100);
+
+    assert_eq!(
+        streams,
+        vec![
+            "btcusdt@depth20@100ms".to_string(),
+            "ethusdt@depth20@100ms".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn build_diff_depth_stream_names() {
+    let symbols = vec!["btcusdt".to_string(), "ETHUSDT".to_string()];
+    let streams = build_diff_depth_streams(&symbols, 100);
 
     assert_eq!(
         streams,
