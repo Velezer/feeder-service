@@ -15,6 +15,7 @@ pub struct Config {
     pub broadcast_capacity: usize,
     pub big_depth_min_qty: f64,
     pub big_depth_min_notional: f64,
+    pub big_depth_min_pressure_pct: f64,
 }
 
 impl Config {
@@ -69,12 +70,18 @@ impl Config {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.0);
 
+        let big_depth_min_pressure_pct = env::var("BIG_DEPTH_MIN_PRESSURE_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
         Config {
             symbols,
             port,
             broadcast_capacity,
             big_depth_min_qty,
             big_depth_min_notional,
+            big_depth_min_pressure_pct,
         }
     }
 
