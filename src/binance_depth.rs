@@ -69,7 +69,9 @@ pub fn passes_pressure_filter(bid_pressure_pct: f64, min_pressure_pct: f64) -> b
     }
 
     let threshold = min_pressure_pct.clamp(0.0, 100.0);
-    bid_pressure_pct >= threshold || bid_pressure_pct <= (100.0 - threshold)
+    let normalized_bid_pressure = bid_pressure_pct.abs().clamp(0.0, 100.0);
+
+    normalized_bid_pressure >= threshold || normalized_bid_pressure <= (100.0 - threshold)
 }
 
 pub fn format_depth_levels(levels: &[ParsedDepthLevel]) -> String {
