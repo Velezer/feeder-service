@@ -100,25 +100,27 @@ async fn main() {
             }
 
             if let Some(depth) = parse_depth_update(payload) {
-                let best_bid = depth
-                    .bids
-                    .first()
-                    .map(|level| format!("{} x {}", level[0], level[1]))
-                    .unwrap_or_else(|| "-".to_string());
-                let best_ask = depth
-                    .asks
-                    .first()
-                    .map(|level| format!("{} x {}", level[0], level[1]))
-                    .unwrap_or_else(|| "-".to_string());
+                let symbol = depth.symbol.to_lowercase();
+                let cfg = match config_map.get(&symbol) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                let matched_bids = collect_big_levels(&depth.bids, cfg.big_trade_qty, 3);
+                let matched_asks = collect_big_levels(&depth.asks, cfg.big_trade_qty, 3);
+
+                if !is_big_depth_update(&matched_bids, &matched_asks) {
+                    continue;
+                }
 
                 let depth_msg = format!(
-                    "[DEPTH] {} E:{} U:{} u:{} bid:{} ask:{}",
+                    "[DEPTH_BIG] {} bids:[{}] asks:[{}] E:{} U:{} u:{}",
                     depth.symbol.to_uppercase(),
+                    format_depth_levels(&matched_bids),
+                    format_depth_levels(&matched_asks),
                     depth.event_time,
                     depth.first_update_id,
-                    depth.final_update_id,
-                    best_bid,
-                    best_ask
+                    depth.final_update_id
                 );
                 println!("{}", depth_msg);
                 let _ = tx.send(depth_msg);
