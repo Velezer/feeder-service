@@ -158,30 +158,6 @@ async fn main() {
                     continue;
                 }
 
-                let summarize_levels = |levels: &[(f64, f64)]| {
-                    if levels.is_empty() {
-                        return "count:0 total_n:0.00 top:-".to_string();
-                    }
-
-                    let total_notional: f64 = levels.iter().map(|(price, qty)| price * qty).sum();
-                    let strongest = levels
-                        .iter()
-                        .max_by(|(price_a, qty_a), (price_b, qty_b)| {
-                            (price_a * qty_a).total_cmp(&(price_b * qty_b))
-                        })
-                        .copied()
-                        .unwrap_or((0.0, 0.0));
-
-                    format!(
-                        "count:{} total_n:{:.2} top:{:.2} x {:.4} (n:{:.2})",
-                        levels.len(),
-                        total_notional,
-                        strongest.0,
-                        strongest.1,
-                        strongest.0 * strongest.1
-                    )
-                };
-
                 let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
                 let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
                 let total_notional = bid_total_notional + ask_total_notional;
@@ -208,16 +184,17 @@ async fn main() {
                 }
 
                 let depth_msg = format!(
-                    "[DEPTH] {} bids:[{}] asks:[{}] pressure:{:.1}%bid E:{} U:{} u:{} big_bids<{}> big_asks<{}>",
+                    "[DEPTH] {} bids:[{}] asks:[{}] pressure:{:.1}%bid/{:.1}%sell E:{} U:{} u:{} big_bids:{} big_asks:{}",
                     depth.symbol.to_uppercase(),
                     format_depth_levels(&matched_bids),
                     format_depth_levels(&matched_asks),
                     bid_pressure_pct,
+                    sell_pressure_pct,
                     depth.event_time,
                     depth.first_update_id,
                     depth.final_update_id,
-                    summarize_levels(&big_bids),
-                    summarize_levels(&big_asks)
+                    big_bids.len(),
+                    big_asks.len()
                 );
                 println!("{}", depth_msg);
                 let _ = tx.send(depth_msg);
