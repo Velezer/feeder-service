@@ -137,6 +137,10 @@ async fn main() {
                             let price = level[0].parse::<f64>().ok()?;
                             let qty = level[1].parse::<f64>().ok()?;
 
+                            if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+                                return None;
+                            }
+
                             if !is_level_big(price, qty) {
                                 return None;
                             }
@@ -153,28 +157,50 @@ async fn main() {
                     continue;
                 }
 
-                let format_levels = |levels: &[(f64, f64)]| {
+                let summarize_levels = |levels: &[(f64, f64)]| {
                     if levels.is_empty() {
-                        return "-".to_string();
+                        return "count:0 total_n:0.00 top:-".to_string();
                     }
 
-                    levels
+                    let total_notional: f64 = levels.iter().map(|(price, qty)| price * qty).sum();
+                    let strongest = levels
                         .iter()
-                        .map(|(price, qty)| format!("{price:.8} x {qty:.8} (n:{:.8})", price * qty))
-                        .collect::<Vec<String>>()
-                        .join(",")
+                        .max_by(|(price_a, qty_a), (price_b, qty_b)| {
+                            (price_a * qty_a).total_cmp(&(price_b * qty_b))
+                        })
+                        .copied()
+                        .unwrap_or((0.0, 0.0));
+
+                    format!(
+                        "count:{} total_n:{:.2} top:{:.2} x {:.4} (n:{:.2})",
+                        levels.len(),
+                        total_notional,
+                        strongest.0,
+                        strongest.1,
+                        strongest.0 * strongest.1
+                    )
+                };
+
+                let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
+                let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
+                let total_notional = bid_total_notional + ask_total_notional;
+                let bid_pressure_pct = if total_notional > 0.0 {
+                    (bid_total_notional / total_notional) * 100.0
+                } else {
+                    0.0
                 };
 
                 let depth_msg = format!(
-                    "[DEPTH] {} bids:[{}] asks:[{}] E:{} U:{} u:{} big_bids:[{}] big_asks:[{}]",
+                    "[DEPTH] {} bids:[{}] asks:[{}] pressure:{:.1}%bid E:{} U:{} u:{} big_bids<{}> big_asks<{}>",
                     depth.symbol.to_uppercase(),
                     format_depth_levels(&matched_bids),
                     format_depth_levels(&matched_asks),
+                    bid_pressure_pct,
                     depth.event_time,
                     depth.first_update_id,
                     depth.final_update_id,
-                    format_levels(&big_bids),
-                    format_levels(&big_asks)
+                    summarize_levels(&big_bids),
+                    summarize_levels(&big_asks)
                 );
                 println!("{}", depth_msg);
                 let _ = tx.send(depth_msg);
