@@ -54,6 +54,10 @@ async fn main() {
         "WebSocket server running on ws://{}:{}/aggTrade",
         ip_display, config.port
     );
+    println!(
+        "Depth filters => min_qty: {}, min_notional: {}",
+        config.big_depth_min_qty, config.big_depth_min_notional
+    );
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
 
     // Binance connection (aggTrade + depth)
@@ -100,25 +104,62 @@ async fn main() {
             }
 
             if let Some(depth) = parse_depth_update(payload) {
-                let best_bid = depth
-                    .bids
-                    .first()
-                    .map(|level| format!("{} x {}", level[0], level[1]))
-                    .unwrap_or_else(|| "-".to_string());
-                let best_ask = depth
-                    .asks
-                    .first()
-                    .map(|level| format!("{} x {}", level[0], level[1]))
-                    .unwrap_or_else(|| "-".to_string());
+                let min_qty = config.big_depth_min_qty;
+                let min_notional = config.big_depth_min_notional;
+
+                let is_level_big = |price: f64, qty: f64| {
+                    if min_qty <= 0.0 && min_notional <= 0.0 {
+                        return true;
+                    }
+
+                    let qty_ok = min_qty > 0.0 && qty >= min_qty;
+                    let notional_ok = min_notional > 0.0 && (price * qty) >= min_notional;
+                    qty_ok || notional_ok
+                };
+
+                let extract_big_levels = |levels: &[[String; 2]]| {
+                    levels
+                        .iter()
+                        .filter_map(|level| {
+                            let price = level[0].parse::<f64>().ok()?;
+                            let qty = level[1].parse::<f64>().ok()?;
+
+                            if !is_level_big(price, qty) {
+                                return None;
+                            }
+
+                            Some((price, qty))
+                        })
+                        .collect::<Vec<(f64, f64)>>()
+                };
+
+                let big_bids = extract_big_levels(&depth.bids);
+                let big_asks = extract_big_levels(&depth.asks);
+
+                if big_bids.is_empty() && big_asks.is_empty() {
+                    continue;
+                }
+
+                let format_levels = |levels: &[(f64, f64)]| {
+                    if levels.is_empty() {
+                        return "-".to_string();
+                    }
+
+                    levels
+                        .iter()
+                        .map(|(price, qty)| format!("{price:.8} x {qty:.8} (n:{:.8})", price * qty))
+                        .collect::<Vec<String>>()
+                        .join(",")
+                };
 
                 let depth_msg = format!(
-                    "[DEPTH] {} E:{} U:{} u:{} bid:{} ask:{}",
+                    "[DEPTH] {} E:{} U:{} u:{} big_bids:[{}] big_asks:[{}]",
                     depth.symbol.to_uppercase(),
                     depth.event_time,
                     depth.first_update_id,
                     depth.final_update_id,
-                    best_bid,
-                    best_ask
+                    format_levels(&big_bids),
+                    format_levels(&big_asks)
                 );
                 println!("{}", depth_msg);
                 let _ = tx.send(depth_msg);

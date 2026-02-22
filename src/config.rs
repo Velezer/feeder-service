@@ -13,6 +13,8 @@ pub struct Config {
     pub symbols: Vec<SymbolConfig>,
     pub port: u16,
     pub broadcast_capacity: usize,
+    pub big_depth_min_qty: f64,
+    pub big_depth_min_notional: f64,
 }
 
 impl Config {
@@ -57,10 +59,22 @@ impl Config {
             .and_then(|v| v.parse::<usize>().ok())
             .unwrap_or(16);
 
+        let big_depth_min_qty = env::var("BIG_DEPTH_MIN_QTY")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let big_depth_min_notional = env::var("BIG_DEPTH_MIN_NOTIONAL")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
         Config {
             symbols,
             port,
             broadcast_capacity,
+            big_depth_min_qty,
+            big_depth_min_notional,
         }
     }
 
