@@ -1,5 +1,8 @@
 use feeder_service::binance::{calc_spike, parse_agg_trade};
-use feeder_service::binance_depth::{build_depth_streams, parse_depth_update};
+use feeder_service::binance_depth::{
+    build_depth_streams, collect_big_levels, format_depth_levels, is_big_depth_update,
+    parse_depth_update,
+};
 
 #[test]
 fn parse_agg_trade_valid_payload() {
@@ -95,4 +98,43 @@ fn build_depth_streams_supports_custom_speed_and_levels() {
     let streams = build_depth_streams(&symbols, 5, 250);
 
     assert_eq!(streams, vec!["solusdt@depth5@250ms".to_string()]);
+}
+
+#[test]
+fn depth_big_levels_detected_and_formatted() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["24100.10","12.5"],["24100.00","1.0"]],"a":[["24100.20","10.0"],["24100.30","0.5"]]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    let bids = collect_big_levels(&depth.bids, 5.0, 3);
+    let asks = collect_big_levels(&depth.asks, 5.0, 3);
+
+    assert!(is_big_depth_update(&bids, &asks));
+    assert_eq!(format_depth_levels(&bids), "24100.10 x 12.5000");
+    assert_eq!(format_depth_levels(&asks), "24100.20 x 10.0000");
+}
+
+#[test]
+fn depth_non_big_updates_are_skipped_by_filter() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["24100.10","1.2"]],"a":[["24100.20","0.8"]]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    let bids = collect_big_levels(&depth.bids, 5.0, 3);
+    let asks = collect_big_levels(&depth.asks, 5.0, 3);
+
+    assert!(!is_big_depth_update(&bids, &asks));
+    assert_eq!(format_depth_levels(&bids), "-");
+    assert_eq!(format_depth_levels(&asks), "-");
+}
+
+#[test]
+fn depth_malformed_levels_do_not_crash_filtering() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["bad-price","7.0"],["24100.10","oops"],["24100.10","8.0"]],"a":[["24100.20","NaN"],["24100.20","6.0"]]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    let bids = collect_big_levels(&depth.bids, 5.0, 3);
+    let asks = collect_big_levels(&depth.asks, 5.0, 3);
+
+    assert_eq!(bids.len(), 1);
+    assert_eq!(asks.len(), 1);
+    assert!(is_big_depth_update(&bids, &asks));
 }

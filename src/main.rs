@@ -104,6 +104,19 @@ async fn main() {
             }
 
             if let Some(depth) = parse_depth_update(payload) {
+                let symbol = depth.symbol.to_lowercase();
+                let cfg = match config_map.get(&symbol) {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                let matched_bids = collect_big_levels(&depth.bids, cfg.big_trade_qty, 3);
+                let matched_asks = collect_big_levels(&depth.asks, cfg.big_trade_qty, 3);
+
+                if !is_big_depth_update(&matched_bids, &matched_asks) {
+                    continue;
+                }
+
                 let min_qty = config.big_depth_min_qty;
                 let min_notional = config.big_depth_min_notional;
 
@@ -155,6 +168,8 @@ async fn main() {
                 let depth_msg = format!(
                     "[DEPTH] {} E:{} U:{} u:{} big_bids:[{}] big_asks:[{}]",
                     depth.symbol.to_uppercase(),
+                    format_depth_levels(&matched_bids),
+                    format_depth_levels(&matched_asks),
                     depth.event_time,
                     depth.first_update_id,
                     depth.final_update_id,
