@@ -1,5 +1,5 @@
 // File: src/binance_depth.rs
-use simd_json::serde::from_slice;
+use crate::json_helpers::parse_combined_data;
 
 #[derive(Debug, serde::Deserialize)]
 pub struct DepthUpdate {
@@ -17,15 +17,8 @@ pub struct DepthUpdate {
     pub final_update_id: u64,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct CombinedDepthStreamMsg {
-    data: DepthUpdate,
-}
-
 pub fn parse_depth_update(msg: &str) -> Option<DepthUpdate> {
-    let mut bytes = msg.as_bytes().to_vec();
-    let wrapper: CombinedDepthStreamMsg = from_slice(&mut bytes).ok()?;
-    Some(wrapper.data)
+    parse_combined_data(msg)
 }
 
 pub fn build_depth_streams(symbols: &[String], levels: u16, speed_ms: u16) -> Vec<String> {

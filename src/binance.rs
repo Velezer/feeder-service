@@ -1,8 +1,8 @@
 // File: src/binance.rs
 use crate::config::SymbolConfig;
+use crate::json_helpers::parse_combined_data;
 use crate::time_helpers::{format_ts, utc_to_utc7};
 use chrono::Utc;
-use simd_json::serde::from_slice;
 use tokio::sync::broadcast;
 
 #[derive(Debug, serde::Deserialize)]
@@ -15,15 +15,8 @@ pub struct AggTrade {
     pub m: bool,
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct CombinedStreamMsg {
-    pub data: AggTrade,
-}
-
 pub fn parse_agg_trade(msg: &str) -> Option<AggTrade> {
-    let mut bytes = msg.as_bytes().to_vec();
-    let wrapper: CombinedStreamMsg = from_slice(&mut bytes).ok()?;
-    Some(wrapper.data)
+    parse_combined_data(msg)
 }
 
 pub fn calc_spike(last_price: Option<f64>, current: f64) -> f64 {
