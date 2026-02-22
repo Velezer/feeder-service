@@ -49,10 +49,12 @@ async fn main() {
             ws.on_upgrade(move |socket| handle_client(socket, tx_inner))
         }
     });
-    let ip = local_ip().unwrap();
+    let ip_display = local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
     println!(
         "WebSocket server running on ws://{}:{}/aggTrade",
-        ip, config.port
+        ip_display, config.port
     );
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
 
