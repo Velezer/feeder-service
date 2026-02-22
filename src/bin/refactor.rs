@@ -1,11 +1,7 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-
-#[derive(Debug, Deserialize)]
-struct Modules(HashMap<String, String>); // key = file path, value = content
 
 fn main() -> Result<()> {
     // 1️⃣ Read JSON

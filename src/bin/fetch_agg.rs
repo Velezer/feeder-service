@@ -8,7 +8,8 @@ struct AggTrade {
     a: u64,    // trade_id
     p: String, // price
     q: String, // quantity
-    T: u64,    // timestamp (ms)
+    #[serde(rename = "T")]
+    t: u64,    // timestamp (ms)
     m: bool,   // is_buyer_maker
 }
 
@@ -96,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut reached_now = false;
 
         for t in &trades {
-            if t.T > now {
+            if t.t > now {
                 reached_now = true;
                 break;
             }
@@ -110,7 +111,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     symbol,
                     t.p.parse::<f64>()?,
                     t.q.parse::<f64>()?,
-                    t.T,
+                    t.t,
                     if t.m {
                         1 // seller 
                     } else {
