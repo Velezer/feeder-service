@@ -21,3 +21,4 @@ target
 #.idea/
 trades.db
 .env
+module_structure.json
