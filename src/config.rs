@@ -17,33 +17,25 @@ pub struct Config {
 
 impl Config {
     pub fn load() -> Self {
-        let default_qty: f64 = env::var("BIG_TRADE_QTY")
-            .unwrap_or_else(|_| "20".to_string())
-            .parse()
-            .expect("BIG_TRADE_QTY must be a number");
+        // Global defaults (optional)
+        let default_qty = env::var("BIG_TRADE_QTY").ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(20.0);
 
-        let default_spike: f64 = env::var("SPIKE_PCT")
-            .unwrap_or_else(|_| "0.4".to_string())
-            .parse()
-            .expect("SPIKE_PCT must be a number");
+        let default_spike = env::var("SPIKE_PCT").ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.4);
 
+        // Parse symbols
         let symbols_str = env::var("SYMBOLS").unwrap_or_else(|_| "btcusdt".to_string());
+
         let symbols: Vec<SymbolConfig> = symbols_str
             .split(',')
             .map(|s| s.trim().to_lowercase())
             .filter(|s| !s.is_empty())
             .map(|symbol| {
-                let upper = symbol.to_uppercase();
-                let big_trade_qty: f64 = env::var(format!("{}_BIG_TRADE_QTY", upper))
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(default_qty);
-
-                let spike_pct: f64 = env::var(format!("{}_SPIKE_PCT", upper))
-                    .ok()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(default_spike);
-
+                let big_trade_qty = Self::load_symbol_env(&symbol, "BIG_TRADE_QTY", default_qty);
+                let spike_pct = Self::load_symbol_env(&symbol, "SPIKE_PCT", default_spike);
                 SymbolConfig {
                     symbol,
                     big_trade_qty,
@@ -52,20 +44,28 @@ impl Config {
             })
             .collect();
 
-        let port: u16 = env::var("PORT")
-            .unwrap_or_else(|_| "9001".to_string())
-            .parse()
-            .expect("PORT must be a number");
+        // Load server config
+        let port = env::var("PORT").ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(9001);
 
-        let broadcast_capacity: usize = env::var("BROADCAST_CAPACITY")
-            .unwrap_or_else(|_| "16".to_string())
-            .parse()
-            .expect("BROADCAST_CAPACITY must be a number");
+        let broadcast_capacity = env::var("BROADCAST_CAPACITY").ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(16);
 
         Config {
             symbols,
             port,
             broadcast_capacity,
         }
+    }
+
+    /// Helper: load per-symbol env variable, fallback to default
+    fn load_symbol_env(symbol: &str, key: &str, default: f64) -> f64 {
+        let env_key = format!("{}_{}", symbol.to_uppercase(), key);
+        env::var(&env_key)
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(default)
     }
 }
