@@ -9,7 +9,7 @@ struct AggTrade {
     p: String, // price
     q: String, // quantity
     #[serde(rename = "T")]
-    t: u64,    // timestamp (ms)
+    t: u64, // timestamp (ms)
     m: bool,   // is_buyer_maker
 }
 
