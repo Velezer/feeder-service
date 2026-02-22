@@ -9,7 +9,7 @@ fn parse_agg_trade_valid_payload() {
     assert_eq!(trade.s, "BTCUSDT");
     assert_eq!(trade.p, "43000.50");
     assert_eq!(trade.q, "0.1200");
-    assert_eq!(trade.T, 1710000000010);
+    assert_eq!(trade.t, 1710000000010);
     assert!(trade.m);
 }
 
