@@ -45,8 +45,7 @@ mod tests {
 
     #[test]
     fn parse_combined_data_rejects_non_matching_data_shape() {
-        let payload =
-            r#"{"stream":"btcusdt@depth@100ms","data":{"b":[["24100.10","1.20"]],"a":[["24100.20","0.80"]]}}"#;
+        let payload = r#"{"stream":"btcusdt@depth@100ms","data":{"b":[["24100.10","1.20"]],"a":[["24100.20","0.80"]]}}"#;
         let parsed: Option<AggTradeLike> = parse_combined_data(payload);
 
         assert!(parsed.is_none());
