@@ -1,7 +1,6 @@
 // File: src/binance.rs
 use crate::config::SymbolConfig;
 use crate::json_helpers::parse_combined_data;
-use crate::time_helpers::{format_ts, utc_to_utc7};
 use chrono::Utc;
 use tokio::sync::broadcast;
 
@@ -35,13 +34,10 @@ pub async fn log_and_broadcast(
     let qty: f64 = agg.q.parse().unwrap_or(0.0);
 
     if qty >= cfg.big_trade_qty || spike >= cfg.spike_pct {
-        let dt_utc7 = utc_to_utc7(agg.t as i64);
-        let ts_str = format_ts(dt_utc7);
         let delay_ms = Utc::now().timestamp_millis() - agg.t as i64;
 
         let log_msg = format!(
-            "[{}] {} - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}, Delay: {} ms",
-            ts_str,
+            "[AGG_TRADE] {} - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}, Delay: {} ms",
             agg.s.to_uppercase(),
             price,
             qty,

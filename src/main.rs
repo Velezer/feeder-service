@@ -189,9 +189,21 @@ async fn main() {
                     (bid_total_notional / total_notional) * 100.0
                 } else {
                     0.0
+                }
+                .clamp(0.0, 100.0);
+                let sell_pressure_pct = (100.0 - bid_pressure_pct).clamp(0.0, 100.0);
+
+                let bid_pressure_pct = if bid_pressure_pct == 0.0 {
+                    0.0
+                } else {
+                    bid_pressure_pct
                 };
 
-                if !passes_pressure_filter(bid_pressure_pct, config.big_depth_min_pressure_pct) {
+                if !passes_pressure_filter(
+                    bid_pressure_pct,
+                    sell_pressure_pct,
+                    config.big_depth_min_pressure_pct,
+                ) {
                     continue;
                 }
 
