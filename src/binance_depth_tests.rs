@@ -84,6 +84,12 @@ fn passes_pressure_filter_requires_directional_imbalance() {
 }
 
 #[test]
+fn passes_pressure_filter_handles_negative_pressure_values() {
+    assert!(passes_pressure_filter(-70.0, 60.0));
+    assert!(!passes_pressure_filter(-52.0, 60.0));
+}
+
+#[test]
 fn format_depth_levels_uses_compact_representation() {
     let levels = vec![
         ParsedDepthLevel {
