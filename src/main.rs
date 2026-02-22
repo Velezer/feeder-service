@@ -122,6 +122,17 @@ async fn main() {
                 );
                 println!("{}", depth_msg);
                 let _ = tx.send(depth_msg);
+                continue;
+            }
+
+            if std::env::var_os("LOG_UNKNOWN_STREAM_MESSAGES").is_some() {
+                let snippet: String = payload.chars().take(180).collect();
+                let suffix = if payload.chars().count() > 180 {
+                    "..."
+                } else {
+                    ""
+                };
+                eprintln!("[stream] unhandled text message: '{}{}'", snippet, suffix);
             }
         }
     }
