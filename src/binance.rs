@@ -10,7 +10,8 @@ pub struct AggTrade {
     pub s: String,
     pub p: String,
     pub q: String,
-    pub T: u64,
+    #[serde(rename = "T")]
+    pub t: u64,
     pub m: bool,
 }
 
@@ -39,9 +40,9 @@ pub async fn log_and_broadcast(
     let qty: f64 = agg.q.parse().unwrap_or(0.0);
 
     if qty >= cfg.big_trade_qty || spike >= cfg.spike_pct {
-        let dt_utc7 = utc_to_utc7(agg.T as i64);
+        let dt_utc7 = utc_to_utc7(agg.t as i64);
         let ts_str = format_ts(dt_utc7);
-        let delay_ms = Utc::now().timestamp_millis() - agg.T as i64;
+        let delay_ms = Utc::now().timestamp_millis() - agg.t as i64;
 
         let log_msg = format!(
             "[{}] {} - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}, Delay: {} ms",
