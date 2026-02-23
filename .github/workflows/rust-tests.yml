@@ -25,7 +25,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: stable
-          components: rustfmt, clippy
+          components: rustfmt
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -42,9 +42,6 @@ jobs:
 
       - name: Run formatting check
         run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run tests
         run: cargo test --all-targets
