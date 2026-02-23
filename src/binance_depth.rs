@@ -105,6 +105,30 @@ pub fn build_diff_depth_streams(symbols: &[String], speed_ms: u16) -> Vec<String
         .collect()
 }
 
+pub fn format_pressure_visual(bid_pressure_pct: f64, width: usize) -> String {
+    let clamped = bid_pressure_pct.clamp(0.0, 100.0);
+    let total_slots = width.max(1);
+    let filled = ((clamped / 100.0) * total_slots as f64).round() as usize;
+    let filled = filled.min(total_slots);
+    let empty = total_slots - filled;
+
+    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+}
+
+pub fn format_notional_compact(notional: f64) -> String {
+    let value = notional.abs();
+
+    if value >= 1_000_000_000.0 {
+        format!("{:.2}B", notional / 1_000_000_000.0)
+    } else if value >= 1_000_000.0 {
+        format!("{:.2}M", notional / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        format!("{:.1}K", notional / 1_000.0)
+    } else {
+        format!("{:.0}", notional)
+    }
+}
+
 #[cfg(test)]
 #[path = "binance_depth_tests.rs"]
 mod tests;
