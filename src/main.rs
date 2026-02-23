@@ -225,18 +225,28 @@ async fn main() {
                         total_notional,
                     };
                     match detector.push(snap) {
-                        BigMoveSignal::BullishBreakout { avg_pressure, total_notional } => {
+                        BigMoveSignal::BullishBreakout {
+                            avg_pressure,
+                            total_notional,
+                        } => {
                             let alert = format!(
                                 "[BIGMOVE] 🚀 {} BULLISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
-                                depth.symbol.to_uppercase(), avg_pressure, total_notional
+                                depth.symbol.to_uppercase(),
+                                avg_pressure,
+                                total_notional
                             );
                             println!("{}", alert);
                             let _ = tx.send(alert);
                         }
-                        BigMoveSignal::BearishBreakout { avg_pressure, total_notional } => {
+                        BigMoveSignal::BearishBreakout {
+                            avg_pressure,
+                            total_notional,
+                        } => {
                             let alert = format!(
                                 "[BIGMOVE] 🔻 {} BEARISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
-                                depth.symbol.to_uppercase(), avg_pressure, total_notional
+                                depth.symbol.to_uppercase(),
+                                avg_pressure,
+                                total_notional
                             );
                             println!("{}", alert);
                             let _ = tx.send(alert);

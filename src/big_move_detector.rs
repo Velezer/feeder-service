@@ -24,8 +24,14 @@ pub struct DepthSnapshot {
 
 #[derive(Debug, PartialEq)]
 pub enum BigMoveSignal {
-    BullishBreakout { avg_pressure: f64, total_notional: f64 },
-    BearishBreakout { avg_pressure: f64, total_notional: f64 },
+    BullishBreakout {
+        avg_pressure: f64,
+        total_notional: f64,
+    },
+    BearishBreakout {
+        avg_pressure: f64,
+        total_notional: f64,
+    },
     None,
 }
 
@@ -57,26 +63,43 @@ impl BigMoveDetector {
         }
 
         // Check last `min_consecutive` snapshots for consistent extreme pressure
-        let recent: Vec<&DepthSnapshot> = self.window.iter().rev().take(self.min_consecutive).collect();
+        let recent: Vec<&DepthSnapshot> = self
+            .window
+            .iter()
+            .rev()
+            .take(self.min_consecutive)
+            .collect();
 
-        let all_bullish = recent.iter().all(|s| s.bid_pressure_pct >= self.pressure_threshold);
-        let all_bearish = recent.iter().all(|s| (100.0 - s.bid_pressure_pct) >= self.pressure_threshold);
+        let all_bullish = recent
+            .iter()
+            .all(|s| s.bid_pressure_pct >= self.pressure_threshold);
+        let all_bearish = recent
+            .iter()
+            .all(|s| (100.0 - s.bid_pressure_pct) >= self.pressure_threshold);
 
         if !all_bullish && !all_bearish {
             return BigMoveSignal::None;
         }
 
-        let avg_pressure: f64 = recent.iter().map(|s| s.bid_pressure_pct).sum::<f64>() / recent.len() as f64;
-        let avg_notional: f64 = recent.iter().map(|s| s.total_notional).sum::<f64>() / recent.len() as f64;
+        let avg_pressure: f64 =
+            recent.iter().map(|s| s.bid_pressure_pct).sum::<f64>() / recent.len() as f64;
+        let avg_notional: f64 =
+            recent.iter().map(|s| s.total_notional).sum::<f64>() / recent.len() as f64;
 
         if avg_notional < self.min_total_notional {
             return BigMoveSignal::None;
         }
 
         if all_bullish {
-            BigMoveSignal::BullishBreakout { avg_pressure, total_notional: avg_notional }
+            BigMoveSignal::BullishBreakout {
+                avg_pressure,
+                total_notional: avg_notional,
+            }
         } else {
-            BigMoveSignal::BearishBreakout { avg_pressure: 100.0 - avg_pressure, total_notional: avg_notional }
+            BigMoveSignal::BearishBreakout {
+                avg_pressure: 100.0 - avg_pressure,
+                total_notional: avg_notional,
+            }
         }
     }
 }
