@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use warp::Filter;
+mod big_move_detector;
+use big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
 
 #[tokio::main]
 async fn main() {
@@ -21,6 +23,7 @@ async fn main() {
 
     let mut config_map = HashMap::new();
     let mut last_prices = HashMap::new();
+    let mut big_move_detectors: HashMap<String, BigMoveDetector> = HashMap::new();
     let symbols: Vec<String> = config
         .symbols
         .iter()
@@ -215,7 +218,32 @@ async fn main() {
                     top_ask
                 );
                 println!("{}", depth_msg);
-                let _ = tx.send(depth_msg);
+                let _ = tx.send(depth_msg.clone());
+                if let Some(detector) = big_move_detectors.get_mut(&symbol) {
+                    let snap = DepthSnapshot {
+                        bid_pressure_pct,
+                        total_notional,
+                    };
+                    match detector.push(snap) {
+                        BigMoveSignal::BullishBreakout { avg_pressure, total_notional } => {
+                            let alert = format!(
+                                "[BIGMOVE] 🚀 {} BULLISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                                depth.symbol.to_uppercase(), avg_pressure, total_notional
+                            );
+                            println!("{}", alert);
+                            let _ = tx.send(alert);
+                        }
+                        BigMoveSignal::BearishBreakout { avg_pressure, total_notional } => {
+                            let alert = format!(
+                                "[BIGMOVE] 🔻 {} BEARISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                                depth.symbol.to_uppercase(), avg_pressure, total_notional
+                            );
+                            println!("{}", alert);
+                            let _ = tx.send(alert);
+                        }
+                        BigMoveSignal::None => {}
+                    }
+                }
                 continue;
             }
 
