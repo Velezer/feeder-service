@@ -41,7 +41,10 @@ async fn main() {
         );
         config_map.insert(cfg.symbol.clone(), cfg.clone());
         // instantiate detector for each symbol (preserve previous behaviour if used later)
-        big_move_detectors.insert(cfg.symbol.to_lowercase(), BigMoveDetector::new(5, 75.0, 0.0, 3));
+        big_move_detectors.insert(
+            cfg.symbol.to_lowercase(),
+            BigMoveDetector::new(5, 75.0, 0.0, 3),
+        );
     }
 
     let (tx, _rx) = broadcast::channel(config.broadcast_capacity);

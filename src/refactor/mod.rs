@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use tokio::sync::broadcast;
 
 use crate::{
-    binance::{calc_spike, log_and_broadcast, AggTrade},
+    binance::{AggTrade, calc_spike, log_and_broadcast},
     binance_depth::{
-        collect_big_levels, format_notional_compact, format_pressure_visual, is_big_depth_update,
-        passes_pressure_filter, DepthUpdate,
+        DepthUpdate, collect_big_levels, format_notional_compact, format_pressure_visual,
+        is_big_depth_update, passes_pressure_filter,
     },
     config::{Config, SymbolConfig},
 };
@@ -40,7 +40,10 @@ impl AppState {
                 cfg.spike_pct
             );
             config_map.insert(cfg.symbol.clone(), cfg.clone());
-            big_move_detectors.insert(cfg.symbol.to_lowercase(), BigMoveDetector::new(5, 75.0, 0.0, 3));
+            big_move_detectors.insert(
+                cfg.symbol.to_lowercase(),
+                BigMoveDetector::new(5, 75.0, 0.0, 3),
+            );
         }
 
         Self {
@@ -51,11 +54,7 @@ impl AppState {
         }
     }
 
-    pub async fn process_agg_trade(
-        &mut self,
-        agg: &AggTrade,
-        tx: &broadcast::Sender<String>,
-    ) {
+    pub async fn process_agg_trade(&mut self, agg: &AggTrade, tx: &broadcast::Sender<String>) {
         let symbol = agg.s.to_lowercase();
         let cfg = match self.config_map.get(&symbol) {
             Some(c) => c,
@@ -71,11 +70,7 @@ impl AppState {
         log_and_broadcast(tx, agg, spike, cfg).await;
     }
 
-    pub fn process_depth_update(
-        &mut self,
-        depth: &DepthUpdate,
-        tx: &broadcast::Sender<String>,
-    ) {
+    pub fn process_depth_update(&mut self, depth: &DepthUpdate, tx: &broadcast::Sender<String>) {
         let symbol = depth.symbol.to_lowercase();
         let cfg = match self.config_map.get(&symbol) {
             Some(c) => c,
@@ -106,19 +101,12 @@ impl AppState {
             return;
         }
 
-        let depth_msg =
-            Self::format_depth_message(depth, &big_bids, &big_asks, bid_pressure_pct);
+        let depth_msg = Self::format_depth_message(depth, &big_bids, &big_asks, bid_pressure_pct);
 
         println!("{}", depth_msg);
         let _ = tx.send(depth_msg.clone());
 
-        self.detect_big_move(
-            &symbol,
-            bid_pressure_pct,
-            total_notional,
-            depth,
-            tx,
-        );
+        self.detect_big_move(&symbol, bid_pressure_pct, total_notional, depth, tx);
     }
 
     fn is_level_big(&self, price: f64, qty: f64) -> bool {
@@ -133,10 +121,7 @@ impl AppState {
         qty_ok || notional_ok
     }
 
-    fn extract_big_levels(
-        &self,
-        depth: &DepthUpdate,
-    ) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+    fn extract_big_levels(&self, depth: &DepthUpdate) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
         let extract = |levels: &[[String; 2]]| {
             levels
                 .iter()
@@ -157,10 +142,7 @@ impl AppState {
         (extract(&depth.bids), extract(&depth.asks))
     }
 
-    fn calculate_pressure(
-        big_bids: &[(f64, f64)],
-        big_asks: &[(f64, f64)],
-    ) -> (f64, f64, f64) {
+    fn calculate_pressure(big_bids: &[(f64, f64)], big_asks: &[(f64, f64)]) -> (f64, f64, f64) {
         let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
         let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
         let total_notional = bid_total_notional + ask_total_notional;
