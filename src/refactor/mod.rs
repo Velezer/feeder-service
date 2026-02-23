@@ -2,10 +2,12 @@ use std::collections::HashMap;
 use tokio::sync::broadcast;
 
 use crate::{
-    binance::AggTrade,
-    binance_depth::DepthUpdate,
+    binance::{calc_spike, log_and_broadcast, AggTrade},
+    binance_depth::{
+        collect_big_levels, format_notional_compact, format_pressure_visual, is_big_depth_update,
+        passes_pressure_filter, DepthUpdate,
+    },
     config::{Config, SymbolConfig},
-    ws_helpers::*,
 };
 
 use self::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
@@ -38,7 +40,7 @@ impl AppState {
                 cfg.spike_pct
             );
             config_map.insert(cfg.symbol.clone(), cfg.clone());
-            big_move_detectors.insert(cfg.symbol.to_lowercase(), BigMoveDetector::new());
+            big_move_detectors.insert(cfg.symbol.to_lowercase(), BigMoveDetector::new(5, 75.0, 0.0, 3));
         }
 
         Self {

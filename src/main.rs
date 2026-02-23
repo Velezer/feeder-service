@@ -9,8 +9,7 @@ use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use warp::Filter;
 
-mod big_move_detector;
-use big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
+use feeder_service::refactor::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
 
 #[tokio::main]
 async fn main() {
@@ -42,7 +41,7 @@ async fn main() {
         );
         config_map.insert(cfg.symbol.clone(), cfg.clone());
         // instantiate detector for each symbol (preserve previous behaviour if used later)
-        big_move_detectors.insert(cfg.symbol.to_lowercase(), BigMoveDetector::new());
+        big_move_detectors.insert(cfg.symbol.to_lowercase(), BigMoveDetector::new(5, 75.0, 0.0, 3));
     }
 
     let (tx, _rx) = broadcast::channel(config.broadcast_capacity);
@@ -127,7 +126,7 @@ async fn main() {
 
 async fn process_agg_trade(
     agg: &feeder_service::binance::AggTrade,
-    config_map: &HashMap<String, Config>,
+    config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     last_prices: &mut HashMap<String, f64>,
     tx: &broadcast::Sender<String>,
 ) {
@@ -149,7 +148,7 @@ async fn process_agg_trade(
 
 fn process_depth_update(
     depth: &feeder_service::binance_depth::DepthUpdate,
-    config_map: &HashMap<String, Config>,
+    config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     config: &Config,
     big_move_detectors: &mut HashMap<String, BigMoveDetector>,
     tx: &broadcast::Sender<String>,
