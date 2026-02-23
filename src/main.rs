@@ -153,7 +153,8 @@ async fn main() {
                         .filter_map(|level| {
                             let price = level[0].parse::<f64>().ok()?;
                             let qty = level[1].parse::<f64>().ok()?;
-                            if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+                            if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0
+                            {
                                 return None;
                             }
                             if !is_level_big(price, qty) {
@@ -238,7 +239,10 @@ async fn main() {
                     };
 
                     match detector.push(snap) {
-                        BigMoveSignal::BullishBreakout { avg_pressure, total_notional } => {
+                        BigMoveSignal::BullishBreakout {
+                            avg_pressure,
+                            total_notional,
+                        } => {
                             let alert = format!(
                                 "[BIGMOVE] {} BULLISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
                                 depth.symbol.to_uppercase(),
@@ -248,7 +252,10 @@ async fn main() {
                             println!("{}", alert);
                             let _ = tx.send(alert);
                         }
-                        BigMoveSignal::BearishBreakout { avg_pressure, total_notional } => {
+                        BigMoveSignal::BearishBreakout {
+                            avg_pressure,
+                            total_notional,
+                        } => {
                             let alert = format!(
                                 "[BIGMOVE] {} BEARISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
                                 depth.symbol.to_uppercase(),
@@ -268,7 +275,11 @@ async fn main() {
             // Unknown / unhandled stream messages (optional logging controlled by env)
             if std::env::var_os("LOG_UNKNOWN_STREAM_MESSAGES").is_some() {
                 let snippet: String = payload.chars().take(180).collect();
-                let suffix = if payload.chars().count() > 180 { "..." } else { "" };
+                let suffix = if payload.chars().count() > 180 {
+                    "..."
+                } else {
+                    ""
+                };
                 eprintln!("[stream] unhandled text message: '{}{}'", snippet, suffix);
             }
         }
