@@ -101,174 +101,13 @@ async fn main() {
 
             // 1) aggTrade messages
             if let Some(agg) = parse_agg_trade(payload) {
-                let symbol = agg.s.to_lowercase();
-                let cfg = match config_map.get(&symbol) {
-                    Some(c) => c,
-                    None => continue,
-                };
-
-                let current_price = agg.p.parse::<f64>().unwrap_or(0.0);
-                let prev_price = last_prices.get(&symbol).copied();
-                let spike = calc_spike(prev_price, current_price);
-
-                last_prices.insert(symbol.clone(), current_price);
-
-                // Preserve asynchronous logging & broadcasting behaviour
-                log_and_broadcast(&tx, &agg, spike, cfg).await;
+                process_agg_trade(&agg, &config_map, &mut last_prices, &tx).await;
                 continue;
             }
 
             // 2) depth updates
             if let Some(depth) = parse_depth_update(payload) {
-                let symbol = depth.symbol.to_lowercase();
-                let cfg = match config_map.get(&symbol) {
-                    Some(c) => c,
-                    None => continue,
-                };
-
-                // collect_big_levels returns matches (original behaviour preserved)
-                let matched_bids = collect_big_levels(&depth.bids, cfg.big_trade_qty, 3);
-                let matched_asks = collect_big_levels(&depth.asks, cfg.big_trade_qty, 3);
-
-                if !is_big_depth_update(&matched_bids, &matched_asks) {
-                    continue;
-                }
-
-                // Filters: min qty and min notional
-                let min_qty = config.big_depth_min_qty;
-                let min_notional = config.big_depth_min_notional;
-
-                let is_level_big = |price: f64, qty: f64| {
-                    if min_qty <= 0.0 && min_notional <= 0.0 {
-                        return true;
-                    }
-                    let qty_ok = min_qty > 0.0 && qty >= min_qty;
-                    let notional_ok = min_notional > 0.0 && (price * qty) >= min_notional;
-                    qty_ok || notional_ok
-                };
-
-                let extract_big_levels = |levels: &[[String; 2]]| {
-                    levels
-                        .iter()
-                        .filter_map(|level| {
-                            let price = level[0].parse::<f64>().ok()?;
-                            let qty = level[1].parse::<f64>().ok()?;
-                            if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0
-                            {
-                                return None;
-                            }
-                            if !is_level_big(price, qty) {
-                                return None;
-                            }
-                            Some((price, qty))
-                        })
-                        .collect::<Vec<(f64, f64)>>()
-                };
-
-                let big_bids = extract_big_levels(&depth.bids);
-                let big_asks = extract_big_levels(&depth.asks);
-
-                if big_bids.is_empty() && big_asks.is_empty() {
-                    continue;
-                }
-
-                let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
-                let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
-                let total_notional = bid_total_notional + ask_total_notional;
-
-                let mut bid_pressure_pct = if total_notional > 0.0 {
-                    (bid_total_notional / total_notional) * 100.0
-                } else {
-                    0.0
-                };
-                bid_pressure_pct = bid_pressure_pct.clamp(0.0, 100.0);
-                let sell_pressure_pct = (100.0 - bid_pressure_pct).clamp(0.0, 100.0);
-
-                // preserve the old conditional (keeps 0.0 if it was 0.0)
-                if bid_pressure_pct == 0.0 {
-                    bid_pressure_pct = 0.0;
-                }
-
-                if !passes_pressure_filter(
-                    bid_pressure_pct,
-                    sell_pressure_pct,
-                    config.big_depth_min_pressure_pct,
-                ) {
-                    continue;
-                }
-
-                let dominant_side = if bid_pressure_pct > sell_pressure_pct {
-                    "BUY"
-                } else if sell_pressure_pct > bid_pressure_pct {
-                    "SELL"
-                } else {
-                    "BALANCED"
-                };
-
-                let top_bid = big_bids
-                    .first()
-                    .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
-                    .unwrap_or_else(|| "-".to_string());
-                let top_ask = big_asks
-                    .first()
-                    .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
-                    .unwrap_or_else(|| "-".to_string());
-
-                let pressure_bar = format_pressure_visual(bid_pressure_pct, 12);
-
-                let depth_msg = format!(
-                    "[DEPTH] {} {} [{}] B:{:.1}% S:{:.1}% | notional {} vs {} | top {} / {}",
-                    depth.symbol.to_uppercase(),
-                    dominant_side,
-                    pressure_bar,
-                    bid_pressure_pct,
-                    sell_pressure_pct,
-                    format_notional_compact(bid_total_notional),
-                    format_notional_compact(ask_total_notional),
-                    top_bid,
-                    top_ask
-                );
-
-                println!("{}", depth_msg);
-                let _ = tx.send(depth_msg.clone());
-
-                if let Some(detector) = big_move_detectors.get_mut(&symbol) {
-                    let snap = DepthSnapshot {
-                        bid_pressure_pct,
-                        total_notional,
-                    };
-
-                    match detector.push(snap) {
-                        BigMoveSignal::BullishBreakout {
-                            avg_pressure,
-                            total_notional,
-                        } => {
-                            let alert = format!(
-                                "[BIGMOVE] {} BULLISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
-                                depth.symbol.to_uppercase(),
-                                avg_pressure,
-                                total_notional
-                            );
-                            println!("{}", alert);
-                            let _ = tx.send(alert);
-                        }
-                        BigMoveSignal::BearishBreakout {
-                            avg_pressure,
-                            total_notional,
-                        } => {
-                            let alert = format!(
-                                "[BIGMOVE] {} BEARISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
-                                depth.symbol.to_uppercase(),
-                                avg_pressure,
-                                total_notional
-                            );
-                            println!("{}", alert);
-                            let _ = tx.send(alert);
-                        }
-                        BigMoveSignal::None => {}
-                    }
-                }
-
+                process_depth_update(&depth, &config_map, &config, &mut big_move_detectors, &tx);
                 continue;
             }
 
@@ -282,6 +121,177 @@ async fn main() {
                 };
                 eprintln!("[stream] unhandled text message: '{}{}'", snippet, suffix);
             }
+        }
+    }
+}
+
+async fn process_agg_trade(
+    agg: &feeder_service::binance::AggTrade,
+    config_map: &HashMap<String, Config>,
+    last_prices: &mut HashMap<String, f64>,
+    tx: &broadcast::Sender<String>,
+) {
+    let symbol = agg.s.to_lowercase();
+    let cfg = match config_map.get(&symbol) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let current_price = agg.p.parse::<f64>().unwrap_or(0.0);
+    let prev_price = last_prices.get(&symbol).copied();
+    let spike = calc_spike(prev_price, current_price);
+
+    last_prices.insert(symbol.clone(), current_price);
+
+    // Preserve asynchronous logging & broadcasting behaviour
+    log_and_broadcast(tx, agg, spike, cfg).await;
+}
+
+fn process_depth_update(
+    depth: &feeder_service::binance_depth::DepthUpdate,
+    config_map: &HashMap<String, Config>,
+    config: &Config,
+    big_move_detectors: &mut HashMap<String, BigMoveDetector>,
+    tx: &broadcast::Sender<String>,
+) {
+    let symbol = depth.symbol.to_lowercase();
+    let cfg = match config_map.get(&symbol) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let matched_bids = collect_big_levels(&depth.bids, cfg.big_trade_qty, 3);
+    let matched_asks = collect_big_levels(&depth.asks, cfg.big_trade_qty, 3);
+
+    if !is_big_depth_update(&matched_bids, &matched_asks) {
+        return;
+    }
+
+    let min_qty = config.big_depth_min_qty;
+    let min_notional = config.big_depth_min_notional;
+
+    let is_level_big = |price: f64, qty: f64| {
+        if min_qty <= 0.0 && min_notional <= 0.0 {
+            return true;
+        }
+        let qty_ok = min_qty > 0.0 && qty >= min_qty;
+        let notional_ok = min_notional > 0.0 && (price * qty) >= min_notional;
+        qty_ok || notional_ok
+    };
+
+    let extract_big_levels = |levels: &[[String; 2]]| {
+        levels
+            .iter()
+            .filter_map(|level| {
+                let price = level[0].parse::<f64>().ok()?;
+                let qty = level[1].parse::<f64>().ok()?;
+                if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+                    return None;
+                }
+                if !is_level_big(price, qty) {
+                    return None;
+                }
+                Some((price, qty))
+            })
+            .collect::<Vec<(f64, f64)>>()
+    };
+
+    let big_bids = extract_big_levels(&depth.bids);
+    let big_asks = extract_big_levels(&depth.asks);
+
+    if big_bids.is_empty() && big_asks.is_empty() {
+        return;
+    }
+
+    let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
+    let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
+    let total_notional = bid_total_notional + ask_total_notional;
+
+    let mut bid_pressure_pct = if total_notional > 0.0 {
+        (bid_total_notional / total_notional) * 100.0
+    } else {
+        0.0
+    };
+    bid_pressure_pct = bid_pressure_pct.clamp(0.0, 100.0);
+    let sell_pressure_pct = (100.0 - bid_pressure_pct).clamp(0.0, 100.0);
+
+    if !passes_pressure_filter(
+        bid_pressure_pct,
+        sell_pressure_pct,
+        config.big_depth_min_pressure_pct,
+    ) {
+        return;
+    }
+
+    let dominant_side = if bid_pressure_pct > sell_pressure_pct {
+        "BUY"
+    } else if sell_pressure_pct > bid_pressure_pct {
+        "SELL"
+    } else {
+        "BALANCED"
+    };
+
+    let top_bid = big_bids
+        .first()
+        .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+        .unwrap_or_else(|| "-".to_string());
+    let top_ask = big_asks
+        .first()
+        .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+        .unwrap_or_else(|| "-".to_string());
+
+    let pressure_bar = format_pressure_visual(bid_pressure_pct, 12);
+
+    let depth_msg = format!(
+        "[DEPTH] {} {} [{}] B:{:.1}% S:{:.1}% | notional {} vs {} | top {} / {}",
+        depth.symbol.to_uppercase(),
+        dominant_side,
+        pressure_bar,
+        bid_pressure_pct,
+        sell_pressure_pct,
+        format_notional_compact(bid_total_notional),
+        format_notional_compact(ask_total_notional),
+        top_bid,
+        top_ask
+    );
+
+    println!("{}", depth_msg);
+    let _ = tx.send(depth_msg.clone());
+
+    if let Some(detector) = big_move_detectors.get_mut(&symbol) {
+        let snap = DepthSnapshot {
+            bid_pressure_pct,
+            total_notional,
+        };
+
+        match detector.push(snap) {
+            BigMoveSignal::BullishBreakout {
+                avg_pressure,
+                total_notional,
+            } => {
+                let alert = format!(
+                    "[BIGMOVE] {} BULLISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                    depth.symbol.to_uppercase(),
+                    avg_pressure,
+                    total_notional
+                );
+                println!("{}", alert);
+                let _ = tx.send(alert);
+            }
+            BigMoveSignal::BearishBreakout {
+                avg_pressure,
+                total_notional,
+            } => {
+                let alert = format!(
+                    "[BIGMOVE] {} BEARISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                    depth.symbol.to_uppercase(),
+                    avg_pressure,
+                    total_notional
+                );
+                println!("{}", alert);
+                let _ = tx.send(alert);
+            }
+            BigMoveSignal::None => {}
         }
     }
 }
