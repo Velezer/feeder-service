@@ -112,6 +112,20 @@ fn format_depth_levels_uses_compact_representation() {
 }
 
 #[test]
+fn format_pressure_visual_renders_balance_bar() {
+    assert_eq!(format_pressure_visual(0.0, 10), "░░░░░░░░░░");
+    assert_eq!(format_pressure_visual(50.0, 10), "█████░░░░░");
+    assert_eq!(format_pressure_visual(100.0, 10), "██████████");
+}
+
+#[test]
+fn format_notional_compact_uses_suffixes() {
+    assert_eq!(format_notional_compact(980.0), "980");
+    assert_eq!(format_notional_compact(1_540.0), "1.5K");
+    assert_eq!(format_notional_compact(2_750_000.0), "2.75M");
+}
+
+#[test]
 fn build_depth_stream_names() {
     let symbols = vec!["btcusdt".to_string(), "ETHUSDT".to_string()];
     let streams = build_depth_streams(&symbols, 20, 100);

@@ -183,18 +183,36 @@ async fn main() {
                     continue;
                 }
 
+                let dominant_side = if bid_pressure_pct > sell_pressure_pct {
+                    "BUY"
+                } else if sell_pressure_pct > bid_pressure_pct {
+                    "SELL"
+                } else {
+                    "BALANCED"
+                };
+
+                let top_bid = big_bids
+                    .first()
+                    .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+                    .unwrap_or_else(|| "-".to_string());
+                let top_ask = big_asks
+                    .first()
+                    .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+                    .unwrap_or_else(|| "-".to_string());
+
+                let pressure_bar = format_pressure_visual(bid_pressure_pct, 12);
+
                 let depth_msg = format!(
-                    "[DEPTH] {} bids:[{}] asks:[{}] pressure:{:.1}%bid/{:.1}%sell E:{} U:{} u:{} big_bids:{} big_asks:{}",
+                    "[DEPTH] {} {} [{}] B:{:.1}% S:{:.1}% | notional {} vs {} | top {} / {}",
                     depth.symbol.to_uppercase(),
-                    format_depth_levels(&matched_bids),
-                    format_depth_levels(&matched_asks),
+                    dominant_side,
+                    pressure_bar,
                     bid_pressure_pct,
                     sell_pressure_pct,
-                    depth.event_time,
-                    depth.first_update_id,
-                    depth.final_update_id,
-                    big_bids.len(),
-                    big_asks.len()
+                    format_notional_compact(bid_total_notional),
+                    format_notional_compact(ask_total_notional),
+                    top_bid,
+                    top_ask
                 );
                 println!("{}", depth_msg);
                 let _ = tx.send(depth_msg);
