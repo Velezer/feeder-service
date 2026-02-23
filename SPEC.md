@@ -12,9 +12,6 @@ It ingests trade streams, detects significant trade events, and distributes them
 - Ensure **reliable delivery** to multiple subscribers.
 - Operate with **minimal latency**.
 
-## Overview
-
-The service continuously receives market trade data, evaluates events against configurable thresholds, and forwards relevant events to all subscribed consumers in real time.
 
 ## Core Functionality
 
