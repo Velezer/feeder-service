@@ -78,7 +78,12 @@ impl Config {
             .unwrap_or(0.0);
 
         let disable_depth_stream = env::var("DISABLE_DEPTH_STREAM")
-            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes"))
+            .map(|v| {
+                // Trim surrounding whitespace and optional surrounding quotes
+                // (e.g. DISABLE_DEPTH_STREAM="true" in some .env parsers keeps the quotes)
+                let trimmed = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                matches!(trimmed.as_str(), "1" | "true" | "yes")
+            })
             .unwrap_or(false);
 
         Config {

@@ -68,7 +68,10 @@ async fn main() {
     );
 
     if config.disable_depth_stream {
-        println!("Depth stream DISABLED (DISABLE_DEPTH_STREAM=true)");
+        println!(
+            "Depth stream DISABLED (DISABLE_DEPTH_STREAM raw value: {:?})",
+            std::env::var("DISABLE_DEPTH_STREAM").unwrap_or_default()
+        );
     } else {
         println!(
             "Depth filters => min_qty: {}, min_notional: {}, min_pressure: {}",
