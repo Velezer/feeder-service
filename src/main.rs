@@ -67,16 +67,24 @@ async fn main() {
         ip_display, config.port
     );
 
-    println!(
-        "Depth filters => min_qty: {}, min_notional: {}, min_pressure: {}",
-        config.big_depth_min_qty, config.big_depth_min_notional, config.big_depth_min_pressure_pct
-    );
+    if config.disable_depth_stream {
+        println!("Depth stream DISABLED (DISABLE_DEPTH_STREAM=true)");
+    } else {
+        println!(
+            "Depth filters => min_qty: {}, min_notional: {}, min_pressure: {}",
+            config.big_depth_min_qty,
+            config.big_depth_min_notional,
+            config.big_depth_min_pressure_pct
+        );
+    }
 
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
 
-    // Build Binance streams: aggTrade for each symbol + diff depth streams
+    // Build Binance streams: aggTrade for each symbol + diff depth streams (unless disabled)
     let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
-    streams.extend(build_diff_depth_streams(&symbols, 100));
+    if !config.disable_depth_stream {
+        streams.extend(build_diff_depth_streams(&symbols, 100));
+    }
 
     let url = format!(
         "wss://data-stream.binance.vision/stream?streams={}",
@@ -107,10 +115,18 @@ async fn main() {
                 continue;
             }
 
-            // 2) depth updates
-            if let Some(depth) = parse_depth_update(payload) {
-                process_depth_update(&depth, &config_map, &config, &mut big_move_detectors, &tx);
-                continue;
+            // 2) depth updates (skipped when DISABLE_DEPTH_STREAM is set)
+            if !config.disable_depth_stream {
+                if let Some(depth) = parse_depth_update(payload) {
+                    process_depth_update(
+                        &depth,
+                        &config_map,
+                        &config,
+                        &mut big_move_detectors,
+                        &tx,
+                    );
+                    continue;
+                }
             }
 
             // Unknown / unhandled stream messages (optional logging controlled by env)
