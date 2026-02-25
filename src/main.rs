@@ -20,6 +20,10 @@ async fn main() {
         return;
     }
 
+    let enable_depth = std::env::var("ENABLE_DEPTH")
+    .map(|v| v == "true" || v == "1")
+    .unwrap_or(false); // default enabled
+
     // Maps and state
     let mut config_map: HashMap<String, _> = HashMap::new();
     let mut last_prices: HashMap<String, f64> = HashMap::new();
@@ -76,7 +80,11 @@ async fn main() {
 
     // Build Binance streams: aggTrade for each symbol + diff depth streams
     let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
-    streams.extend(build_diff_depth_streams(&symbols, 100));
+    if enable_depth {
+        streams.extend(build_diff_depth_streams(&symbols, 100));
+    } else {
+        println!("[INFO] Depth streams are disabled by feature flag.");
+    }
 
     let url = format!(
         "wss://data-stream.binance.vision/stream?streams={}",
