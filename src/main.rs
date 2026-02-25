@@ -21,8 +21,8 @@ async fn main() {
     }
 
     let enable_depth = std::env::var("ENABLE_DEPTH")
-    .map(|v| v == "true" || v == "1")
-    .unwrap_or(false); // default enabled
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false); // default enabled
 
     // Maps and state
     let mut config_map: HashMap<String, _> = HashMap::new();
