@@ -16,6 +16,8 @@ pub struct Config {
     pub big_depth_min_qty: f64,
     pub big_depth_min_notional: f64,
     pub big_depth_min_pressure_pct: f64,
+    /// When `true`, depth streams are not subscribed and depth messages are not processed.
+    pub disable_depth_stream: bool,
 }
 
 impl Config {
@@ -75,6 +77,15 @@ impl Config {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.0);
 
+        let disable_depth_stream = env::var("DISABLE_DEPTH_STREAM")
+            .map(|v| {
+                // Trim surrounding whitespace and optional surrounding quotes
+                // (e.g. DISABLE_DEPTH_STREAM="true" in some .env parsers keeps the quotes)
+                let trimmed = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                matches!(trimmed.as_str(), "1" | "true" | "yes")
+            })
+            .unwrap_or(false);
+
         Config {
             symbols,
             port,
@@ -82,6 +93,7 @@ impl Config {
             big_depth_min_qty,
             big_depth_min_notional,
             big_depth_min_pressure_pct,
+            disable_depth_stream,
         }
     }
 
