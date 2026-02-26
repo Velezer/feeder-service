@@ -1,0 +1,183 @@
+name: AI Code Agent
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  ai-agent:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      ############################################
+      # Determine Event Type
+      ############################################
+
+      - name: Set Mode (create or refine)
+        id: mode
+        run: |
+          if [[ "${{ github.event_name }}" == "issues" ]]; then
+            echo "mode=create" >> $GITHUB_OUTPUT
+            echo "branch=ai-issue-${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+          elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
+            if [[ "${{ github.event.issue.pull_request }}" != "" ]]; then
+              echo "mode=refine" >> $GITHUB_OUTPUT
+              echo "branch=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+            else
+              echo "skip=true" >> $GITHUB_OUTPUT
+            fi
+          elif [[ "${{ github.event_name }}" == "pull_request_review" ]]; then
+            if [[ "${{ github.event.review.state }}" == "changes_requested" ]]; then
+              echo "mode=refine" >> $GITHUB_OUTPUT
+              echo "branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+            else
+              echo "skip=true" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Stop if not AI-related
+        if: steps.mode.outputs.skip == 'true'
+        run: echo "Not an AI-triggered event." && exit 0
+
+      ############################################
+      # Create Mode (New PR)
+      ############################################
+
+      - name: Prepare context (Create Mode)
+        if: steps.mode.outputs.mode == 'create'
+        run: |
+          mkdir context
+
+          find . -type f \( \
+            -name "*.rs" -o \
+            -name "*.go" -o \
+            -name "*.kt" -o \
+            -name "*.kts" \
+          \) -not -path "./.git/*" | head -n 15 | while read file; do
+            echo "FILE: $file" >> context/files.txt
+            echo "------------------------" >> context/files.txt
+            cat "$file" >> context/files.txt
+            echo -e "\n\n" >> context/files.txt
+          done
+
+      ############################################
+      # Refine Mode (Existing PR)
+      ############################################
+
+      - name: Checkout PR branch
+        if: steps.mode.outputs.mode == 'refine'
+        run: |
+          git fetch origin
+          git checkout ${{ github.event.pull_request.head.ref || steps.mode.outputs.branch }}
+
+      - name: Prepare context (Refine Mode)
+        if: steps.mode.outputs.mode == 'refine'
+        run: |
+          mkdir context
+          git diff origin/${{ github.event.repository.default_branch }} > context/diff.txt
+
+          find . -type f \( \
+            -name "*.rs" -o \
+            -name "*.go" -o \
+            -name "*.kt" -o \
+            -name "*.kts" \
+          \) -not -path "./.git/*" | head -n 15 | while read file; do
+            echo "FILE: $file" >> context/files.txt
+            echo "------------------------" >> context/files.txt
+            cat "$file" >> context/files.txt
+            echo -e "\n\n" >> context/files.txt
+          done
+
+      ############################################
+      # Call LM Studio
+      ############################################
+
+      - name: Call Local LLM
+        id: llm
+        env:
+          LM_URL: ${{ secrets.LMSTUDIO_URL }}
+          LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
+        run: |
+
+          if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
+            TASK="${{ github.event.issue.title }}\n\n${{ github.event.issue.body }}"
+          else
+            TASK="Refine the PR based on this feedback:\n\n${{ github.event.comment.body || github.event.review.body }}"
+          fi
+
+          RESPONSE=$(curl -s $LM_URL/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $LM_KEY" \
+            -d @- <<EOF
+          {
+            "model": "local-model",
+            "temperature": 0.2,
+            "messages": [
+              {
+                "role": "user",
+                "content": "You are an autonomous coding agent.\n\nTask:\n$TASK\n\nRepository Context:\n$(cat context/files.txt)\n\nReturn STRICT JSON:\n{\n  \"MODIFIED_FILES\": {\"path\": \"new content\"},\n  \"PR_TITLE\": \"title\",\n  \"PR_BODY\": \"body\"\n}"
+              }
+            ]
+          }
+          EOF
+          )
+
+          echo "$RESPONSE" > response.json
+          CONTENT=$(jq -r '.choices[0].message.content' response.json)
+          echo "$CONTENT" > parsed.json
+
+      ############################################
+      # Apply Changes
+      ############################################
+
+      - name: Apply file updates
+        run: |
+          if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
+            git checkout -b ai-issue-${{ github.event.issue.number }}
+          fi
+
+          jq -r '.MODIFIED_FILES | to_entries[] | "\(.key)"' parsed.json | while read file; do
+            mkdir -p "$(dirname "$file")"
+            jq -r --arg f "$file" '.MODIFIED_FILES[$f]' parsed.json > "$file"
+          done
+
+          git config user.name "AI Agent"
+          git config user.email "actions@github.com"
+
+          git add .
+          git commit -m "AI update"
+          git push --set-upstream origin $(git branch --show-current)
+
+      ############################################
+      # Create PR (only in create mode)
+      ############################################
+
+      - name: Create Pull Request
+        if: steps.mode.outputs.mode == 'create'
+        run: |
+          PR_TITLE=$(jq -r '.PR_TITLE' parsed.json)
+          PR_BODY=$(jq -r '.PR_BODY' parsed.json)
+
+          gh pr create \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --head "ai-issue-${{ github.event.issue.number }}" \
+            --base "${{ github.event.repository.default_branch }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
