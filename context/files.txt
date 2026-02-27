@@ -1,0 +1,1779 @@
+FILE: ./tests/binance_streams_integration.rs
+------------------------
+use feeder_service::binance::{calc_spike, parse_agg_trade};
+use feeder_service::binance_depth::{
+    build_depth_streams, collect_big_levels, format_depth_levels, is_big_depth_update,
+    parse_depth_update,
+};
+
+#[test]
+fn parse_agg_trade_valid_payload() {
+    let payload = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1710000000000,"s":"BTCUSDT","p":"43000.50","q":"0.1200","T":1710000000010,"m":true}}"#;
+    let trade = parse_agg_trade(payload).expect("expected a parsed aggTrade payload");
+
+    assert_eq!(trade.s, "BTCUSDT");
+    assert_eq!(trade.p, "43000.50");
+    assert_eq!(trade.q, "0.1200");
+    assert_eq!(trade.t, 1710000000010);
+    assert!(trade.m);
+}
+
+#[test]
+fn parse_agg_trade_rejects_depth_payload() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["24100.10","1.20"]],"a":[["24100.20","0.80"]]}}"#;
+    assert!(parse_agg_trade(payload).is_none());
+}
+
+#[test]
+fn parse_agg_trade_rejects_invalid_json() {
+    let payload = "this is not json";
+    assert!(parse_agg_trade(payload).is_none());
+}
+
+#[test]
+fn calc_spike_returns_zero_without_previous_price() {
+    assert_eq!(calc_spike(None, 100.0), 0.0);
+}
+
+#[test]
+fn calc_spike_for_upward_move() {
+    let spike = calc_spike(Some(100.0), 105.0);
+    assert!((spike - 5.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn calc_spike_for_downward_move() {
+    let spike = calc_spike(Some(100.0), 95.0);
+    assert!((spike - 5.0).abs() < f64::EPSILON);
+}
+
+#[test]
+fn parse_depth_update_valid_payload() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["24100.10","1.20"],["24100.00","2.10"]],"a":[["24100.20","0.80"],["24100.30","1.75"]]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    assert_eq!(depth.symbol, "BTCUSDT");
+    assert_eq!(depth.event_time, 1672515782136);
+    assert_eq!(depth.first_update_id, 157);
+    assert_eq!(depth.final_update_id, 160);
+    assert_eq!(depth.bids.len(), 2);
+    assert_eq!(depth.asks.len(), 2);
+}
+
+#[test]
+fn parse_depth_update_handles_empty_levels() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[],"a":[]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    assert!(depth.bids.is_empty());
+    assert!(depth.asks.is_empty());
+}
+
+#[test]
+fn parse_depth_update_rejects_agg_trade_payload() {
+    let payload = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1710000000000,"s":"BTCUSDT","p":"43000.50","q":"0.1200","T":1710000000010,"m":true}}"#;
+    assert!(parse_depth_update(payload).is_none());
+}
+
+#[test]
+fn parse_depth_update_rejects_invalid_json() {
+    assert!(parse_depth_update("not json").is_none());
+}
+
+#[test]
+fn build_depth_streams_lowercases_symbols() {
+    let symbols = vec!["BTCUSDT".to_string(), "EthUsdt".to_string()];
+    let streams = build_depth_streams(&symbols, 20, 100);
+
+    assert_eq!(
+        streams,
+        vec![
+            "btcusdt@depth20@100ms".to_string(),
+            "ethusdt@depth20@100ms".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn build_depth_streams_supports_custom_speed_and_levels() {
+    let symbols = vec!["solusdt".to_string()];
+    let streams = build_depth_streams(&symbols, 5, 250);
+
+    assert_eq!(streams, vec!["solusdt@depth5@250ms".to_string()]);
+}
+
+#[test]
+fn depth_big_levels_detected_and_formatted() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["24100.10","12.5"],["24100.00","1.0"]],"a":[["24100.20","10.0"],["24100.30","0.5"]]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    let bids = collect_big_levels(&depth.bids, 5.0, 3);
+    let asks = collect_big_levels(&depth.asks, 5.0, 3);
+
+    assert!(is_big_depth_update(&bids, &asks));
+    assert_eq!(format_depth_levels(&bids), "24100.10 x 12.5000");
+    assert_eq!(format_depth_levels(&asks), "24100.20 x 10.0000");
+}
+
+#[test]
+fn depth_non_big_updates_are_skipped_by_filter() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["24100.10","1.2"]],"a":[["24100.20","0.8"]]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    let bids = collect_big_levels(&depth.bids, 5.0, 3);
+    let asks = collect_big_levels(&depth.asks, 5.0, 3);
+
+    assert!(!is_big_depth_update(&bids, &asks));
+    assert_eq!(format_depth_levels(&bids), "-");
+    assert_eq!(format_depth_levels(&asks), "-");
+}
+
+#[test]
+fn depth_malformed_levels_do_not_crash_filtering() {
+    let payload = r#"{"stream":"btcusdt@depth20@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["bad-price","7.0"],["24100.10","oops"],["24100.10","8.0"]],"a":[["24100.20","NaN"],["24100.20","6.0"]]}}"#;
+    let depth = parse_depth_update(payload).expect("expected a parsed depth payload");
+
+    let bids = collect_big_levels(&depth.bids, 5.0, 3);
+    let asks = collect_big_levels(&depth.asks, 5.0, 3);
+
+    assert_eq!(bids.len(), 1);
+    assert_eq!(asks.len(), 1);
+    assert!(is_big_depth_update(&bids, &asks));
+}
+
+
+
+FILE: ./src/binance_depth.rs
+------------------------
+// File: src/binance_depth.rs
+use crate::json_helpers::parse_combined_data;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct DepthUpdate {
+    #[serde(rename = "s")]
+    pub symbol: String,
+    #[serde(rename = "b")]
+    pub bids: Vec<[String; 2]>,
+    #[serde(rename = "a")]
+    pub asks: Vec<[String; 2]>,
+    #[serde(rename = "E")]
+    pub event_time: u64,
+    #[serde(rename = "U")]
+    pub first_update_id: u64,
+    #[serde(rename = "u")]
+    pub final_update_id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedDepthLevel {
+    pub price: f64,
+    pub qty: f64,
+    pub notional: f64,
+}
+
+pub fn parse_depth_update(msg: &str) -> Option<DepthUpdate> {
+    parse_combined_data(msg)
+}
+
+pub fn parse_depth_level(level: &[String; 2]) -> Option<ParsedDepthLevel> {
+    let price = level[0].parse::<f64>().ok()?;
+    let qty = level[1].parse::<f64>().ok()?;
+
+    if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+        return None;
+    }
+
+    Some(ParsedDepthLevel {
+        price,
+        qty,
+        notional: price * qty,
+    })
+}
+
+pub fn collect_big_levels(
+    levels: &[[String; 2]],
+    min_qty: f64,
+    max_matches: usize,
+) -> Vec<ParsedDepthLevel> {
+    let mut matches: Vec<ParsedDepthLevel> = levels
+        .iter()
+        .filter_map(parse_depth_level)
+        .filter(|level| level.qty >= min_qty)
+        .collect();
+
+    matches.sort_by(|a, b| b.notional.total_cmp(&a.notional));
+    matches.truncate(max_matches);
+    matches
+}
+
+pub fn is_big_depth_update(bids: &[ParsedDepthLevel], asks: &[ParsedDepthLevel]) -> bool {
+    !bids.is_empty() || !asks.is_empty()
+}
+
+pub fn passes_pressure_filter(
+    bid_pressure_pct: f64,
+    sell_pressure_pct: f64,
+    min_pressure_pct: f64,
+) -> bool {
+    if min_pressure_pct <= 0.0 {
+        return true;
+    }
+
+    let threshold = min_pressure_pct.clamp(0.0, 100.0);
+    let bid_pressure = bid_pressure_pct.clamp(0.0, 100.0);
+    let sell_pressure = sell_pressure_pct.clamp(0.0, 100.0);
+
+    bid_pressure >= threshold || sell_pressure >= threshold
+}
+
+pub fn format_depth_levels(levels: &[ParsedDepthLevel]) -> String {
+    if levels.is_empty() {
+        return "-".to_string();
+    }
+
+    levels
+        .iter()
+        .map(|level| format!("{:.2} x {:.4}", level.price, level.qty))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+pub fn build_depth_streams(symbols: &[String], levels: u16, speed_ms: u16) -> Vec<String> {
+    symbols
+        .iter()
+        .map(|symbol| format!("{}@depth{}@{}ms", symbol.to_lowercase(), levels, speed_ms))
+        .collect()
+}
+
+pub fn build_diff_depth_streams(symbols: &[String], speed_ms: u16) -> Vec<String> {
+    symbols
+        .iter()
+        .map(|symbol| format!("{}@depth@{}ms", symbol.to_lowercase(), speed_ms))
+        .collect()
+}
+
+pub fn format_pressure_visual(bid_pressure_pct: f64, width: usize) -> String {
+    let clamped = bid_pressure_pct.clamp(0.0, 100.0);
+    let total_slots = width.max(1);
+    let filled = ((clamped / 100.0) * total_slots as f64).round() as usize;
+    let filled = filled.min(total_slots);
+    let empty = total_slots - filled;
+
+    format!("{}{}", "█".repeat(filled), "░".repeat(empty))
+}
+
+pub fn format_notional_compact(notional: f64) -> String {
+    let value = notional.abs();
+
+    if value >= 1_000_000_000.0 {
+        format!("{:.2}B", notional / 1_000_000_000.0)
+    } else if value >= 1_000_000.0 {
+        format!("{:.2}M", notional / 1_000_000.0)
+    } else if value >= 1_000.0 {
+        format!("{:.1}K", notional / 1_000.0)
+    } else {
+        format!("{:.0}", notional)
+    }
+}
+
+#[cfg(test)]
+#[path = "binance_depth_tests.rs"]
+mod tests;
+
+
+
+FILE: ./src/refactor/mod.rs
+------------------------
+use std::collections::HashMap;
+use tokio::sync::broadcast;
+
+use crate::{
+    binance::{AggTrade, calc_spike, log_and_broadcast},
+    binance_depth::{
+        DepthUpdate, collect_big_levels, format_notional_compact, format_pressure_visual,
+        is_big_depth_update, passes_pressure_filter,
+    },
+    config::{Config, SymbolConfig},
+};
+
+use self::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
+
+pub mod big_move_detector;
+
+/// Shared application state
+pub struct AppState {
+    /// App configuration
+    pub config: Config,
+    /// Map of symbol to symbol-specific configuration
+    config_map: HashMap<String, SymbolConfig>,
+    /// Map of symbol to last trade price
+    last_prices: HashMap<String, f64>,
+    /// Map of symbol to big move detector
+    big_move_detectors: HashMap<String, BigMoveDetector>,
+}
+
+impl AppState {
+    /// Create a new AppState
+    pub fn new(config: Config) -> Self {
+        let mut config_map = HashMap::new();
+        let mut big_move_detectors = HashMap::new();
+
+        for cfg in &config.symbols {
+            println!(
+                "Symbol: {} => Big Trade Qty: {}, Spike %: {}",
+                cfg.symbol.to_uppercase(),
+                cfg.big_trade_qty,
+                cfg.spike_pct
+            );
+            config_map.insert(cfg.symbol.clone(), cfg.clone());
+            big_move_detectors.insert(
+                cfg.symbol.to_lowercase(),
+                BigMoveDetector::new(5, 75.0, 0.0, 3),
+            );
+        }
+
+        Self {
+            config,
+            config_map,
+            last_prices: HashMap::new(),
+            big_move_detectors,
+        }
+    }
+
+    pub async fn process_agg_trade(&mut self, agg: &AggTrade, tx: &broadcast::Sender<String>) {
+        let symbol = agg.s.to_lowercase();
+        let cfg = match self.config_map.get(&symbol) {
+            Some(c) => c,
+            None => return,
+        };
+
+        let current_price = agg.p.parse::<f64>().unwrap_or(0.0);
+        let prev_price = self.last_prices.get(&symbol).copied();
+        let spike = calc_spike(prev_price, current_price);
+
+        self.last_prices.insert(symbol.clone(), current_price);
+
+        log_and_broadcast(tx, agg, spike, cfg).await;
+    }
+
+    pub fn process_depth_update(&mut self, depth: &DepthUpdate, tx: &broadcast::Sender<String>) {
+        let symbol = depth.symbol.to_lowercase();
+        let cfg = match self.config_map.get(&symbol) {
+            Some(c) => c,
+            None => return,
+        };
+
+        let matched_bids = collect_big_levels(&depth.bids, cfg.big_trade_qty, 3);
+        let matched_asks = collect_big_levels(&depth.asks, cfg.big_trade_qty, 3);
+
+        if !is_big_depth_update(&matched_bids, &matched_asks) {
+            return;
+        }
+
+        let (big_bids, big_asks) = self.extract_big_levels(depth);
+
+        if big_bids.is_empty() && big_asks.is_empty() {
+            return;
+        }
+
+        let (bid_pressure_pct, sell_pressure_pct, total_notional) =
+            Self::calculate_pressure(&big_bids, &big_asks);
+
+        if !passes_pressure_filter(
+            bid_pressure_pct,
+            sell_pressure_pct,
+            self.config.big_depth_min_pressure_pct,
+        ) {
+            return;
+        }
+
+        let depth_msg = Self::format_depth_message(depth, &big_bids, &big_asks, bid_pressure_pct);
+
+        println!("{}", depth_msg);
+        let _ = tx.send(depth_msg.clone());
+
+        self.detect_big_move(&symbol, bid_pressure_pct, total_notional, depth, tx);
+    }
+
+    fn is_level_big(&self, price: f64, qty: f64) -> bool {
+        let min_qty = self.config.big_depth_min_qty;
+        let min_notional = self.config.big_depth_min_notional;
+
+        if min_qty <= 0.0 && min_notional <= 0.0 {
+            return true;
+        }
+        let qty_ok = min_qty > 0.0 && qty >= min_qty;
+        let notional_ok = min_notional > 0.0 && (price * qty) >= min_notional;
+        qty_ok || notional_ok
+    }
+
+    fn extract_big_levels(&self, depth: &DepthUpdate) -> (Vec<(f64, f64)>, Vec<(f64, f64)>) {
+        let extract = |levels: &[[String; 2]]| {
+            levels
+                .iter()
+                .filter_map(|level| {
+                    let price = level[0].parse::<f64>().ok()?;
+                    let qty = level[1].parse::<f64>().ok()?;
+                    if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+                        return None;
+                    }
+                    if !self.is_level_big(price, qty) {
+                        return None;
+                    }
+                    Some((price, qty))
+                })
+                .collect::<Vec<(f64, f64)>>()
+        };
+
+        (extract(&depth.bids), extract(&depth.asks))
+    }
+
+    fn calculate_pressure(big_bids: &[(f64, f64)], big_asks: &[(f64, f64)]) -> (f64, f64, f64) {
+        let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
+        let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
+        let total_notional = bid_total_notional + ask_total_notional;
+
+        let bid_pressure_pct = if total_notional > 0.0 {
+            (bid_total_notional / total_notional) * 100.0
+        } else {
+            0.0
+        };
+
+        let bid_pressure_pct = bid_pressure_pct.clamp(0.0, 100.0);
+        let sell_pressure_pct = (100.0 - bid_pressure_pct).clamp(0.0, 100.0);
+
+        (bid_pressure_pct, sell_pressure_pct, total_notional)
+    }
+
+    fn format_depth_message(
+        depth: &DepthUpdate,
+        big_bids: &[(f64, f64)],
+        big_asks: &[(f64, f64)],
+        bid_pressure_pct: f64,
+    ) -> String {
+        let sell_pressure_pct = (100.0 - bid_pressure_pct).clamp(0.0, 100.0);
+        let dominant_side = if bid_pressure_pct > sell_pressure_pct {
+            "BUY"
+        } else if sell_pressure_pct > bid_pressure_pct {
+            "SELL"
+        } else {
+            "BALANCED"
+        };
+
+        let top_bid = big_bids
+            .first()
+            .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+            .unwrap_or_else(|| "-".to_string());
+        let top_ask = big_asks
+            .first()
+            .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+            .unwrap_or_else(|| "-".to_string());
+
+        let pressure_bar = format_pressure_visual(bid_pressure_pct, 12);
+        let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
+        let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
+
+        format!(
+            "[DEPTH] {} {} [{}] B:{:.1}% S:{:.1}% | notional {} vs {} | top {} / {}",
+            depth.symbol.to_uppercase(),
+            dominant_side,
+            pressure_bar,
+            bid_pressure_pct,
+            sell_pressure_pct,
+            format_notional_compact(bid_total_notional),
+            format_notional_compact(ask_total_notional),
+            top_bid,
+            top_ask
+        )
+    }
+
+    fn detect_big_move(
+        &mut self,
+        symbol: &str,
+        bid_pressure_pct: f64,
+        total_notional: f64,
+        depth: &DepthUpdate,
+        tx: &broadcast::Sender<String>,
+    ) {
+        if let Some(detector) = self.big_move_detectors.get_mut(symbol) {
+            let snap = DepthSnapshot {
+                bid_pressure_pct,
+                total_notional,
+            };
+
+            match detector.push(snap) {
+                BigMoveSignal::BullishBreakout {
+                    avg_pressure,
+                    total_notional,
+                } => {
+                    let alert = format!(
+                        "[BIGMOVE] {} BULLISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                        depth.symbol.to_uppercase(),
+                        avg_pressure,
+                        total_notional
+                    );
+                    println!("{}", alert);
+                    let _ = tx.send(alert);
+                }
+                BigMoveSignal::BearishBreakout {
+                    avg_pressure,
+                    total_notional,
+                } => {
+                    let alert = format!(
+                        "[BIGMOVE] {} BEARISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                        depth.symbol.to_uppercase(),
+                        avg_pressure,
+                        total_notional
+                    );
+                    println!("{}", alert);
+                    let _ = tx.send(alert);
+                }
+                BigMoveSignal::None => {}
+            }
+        }
+    }
+}
+
+
+
+FILE: ./src/refactor/big_move_detector.rs
+------------------------
+use std::collections::VecDeque;
+
+/// Rolling window of depth pressure snapshots per symbol.
+/// Fires a big-move signal when:
+///   1. The rolling average pressure is extreme (>= threshold), AND
+///   2. Total notional exceeds a minimum, AND
+///   3. The direction has been consistent for `min_consecutive` snapshots.
+pub struct BigMoveDetector {
+    window: VecDeque<DepthSnapshot>,
+    window_size: usize,
+    /// 0-100. e.g. 75.0 means 75% bid or sell pressure triggers alert.
+    pressure_threshold: f64,
+    /// Minimum total notional (bid+ask) to consider the signal meaningful.
+    min_total_notional: f64,
+    /// How many consecutive same-side readings are required.
+    min_consecutive: usize,
+}
+
+#[derive(Clone)]
+pub struct DepthSnapshot {
+    pub bid_pressure_pct: f64,
+    pub total_notional: f64,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum BigMoveSignal {
+    BullishBreakout {
+        avg_pressure: f64,
+        total_notional: f64,
+    },
+    BearishBreakout {
+        avg_pressure: f64,
+        total_notional: f64,
+    },
+    None,
+}
+
+impl BigMoveDetector {
+    pub fn new(
+        window_size: usize,
+        pressure_threshold: f64,
+        min_total_notional: f64,
+        min_consecutive: usize,
+    ) -> Self {
+        Self {
+            window: VecDeque::with_capacity(window_size),
+            window_size,
+            pressure_threshold,
+            min_total_notional,
+            min_consecutive,
+        }
+    }
+
+    /// Push a new depth snapshot and evaluate.
+    pub fn push(&mut self, snapshot: DepthSnapshot) -> BigMoveSignal {
+        if self.window.len() == self.window_size {
+            self.window.pop_front();
+        }
+        self.window.push_back(snapshot);
+
+        if self.window.len() < self.min_consecutive {
+            return BigMoveSignal::None;
+        }
+
+        // Check last `min_consecutive` snapshots for consistent extreme pressure
+        let recent: Vec<&DepthSnapshot> = self
+            .window
+            .iter()
+            .rev()
+            .take(self.min_consecutive)
+            .collect();
+
+        let all_bullish = recent
+            .iter()
+            .all(|s| s.bid_pressure_pct >= self.pressure_threshold);
+        let all_bearish = recent
+            .iter()
+            .all(|s| (100.0 - s.bid_pressure_pct) >= self.pressure_threshold);
+
+        if !all_bullish && !all_bearish {
+            return BigMoveSignal::None;
+        }
+
+        let avg_pressure: f64 =
+            recent.iter().map(|s| s.bid_pressure_pct).sum::<f64>() / recent.len() as f64;
+        let avg_notional: f64 =
+            recent.iter().map(|s| s.total_notional).sum::<f64>() / recent.len() as f64;
+
+        if avg_notional < self.min_total_notional {
+            return BigMoveSignal::None;
+        }
+
+        if all_bullish {
+            BigMoveSignal::BullishBreakout {
+                avg_pressure,
+                total_notional: avg_notional,
+            }
+        } else {
+            BigMoveSignal::BearishBreakout {
+                avg_pressure: 100.0 - avg_pressure,
+                total_notional: avg_notional,
+            }
+        }
+    }
+}
+
+
+
+FILE: ./src/config.rs
+------------------------
+// File: src/config.rs
+use std::env;
+
+#[derive(Debug, Clone)]
+pub struct SymbolConfig {
+    pub symbol: String,
+    pub big_trade_qty: f64,
+    pub spike_pct: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub symbols: Vec<SymbolConfig>,
+    pub port: u16,
+    pub broadcast_capacity: usize,
+    pub big_depth_min_qty: f64,
+    pub big_depth_min_notional: f64,
+    pub big_depth_min_pressure_pct: f64,
+    /// When `true`, depth streams are not subscribed and depth messages are not processed.
+    pub disable_depth_stream: bool,
+}
+
+impl Config {
+    pub fn load() -> Self {
+        // Global defaults (optional)
+        let default_qty = env::var("BIG_TRADE_QTY")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(20.0);
+
+        let default_spike = env::var("SPIKE_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.4);
+
+        // Parse symbols
+        let symbols_str = env::var("SYMBOLS").unwrap_or_else(|_| "btcusdt".to_string());
+
+        let symbols: Vec<SymbolConfig> = symbols_str
+            .split(',')
+            .map(|s| s.trim().to_lowercase())
+            .filter(|s| !s.is_empty())
+            .map(|symbol| {
+                let big_trade_qty = Self::load_symbol_env(&symbol, "BIG_TRADE_QTY", default_qty);
+                let spike_pct = Self::load_symbol_env(&symbol, "SPIKE_PCT", default_spike);
+                SymbolConfig {
+                    symbol,
+                    big_trade_qty,
+                    spike_pct,
+                }
+            })
+            .collect();
+
+        // Load server config
+        let port = env::var("PORT")
+            .ok()
+            .and_then(|v| v.parse::<u16>().ok())
+            .unwrap_or(9001);
+
+        let broadcast_capacity = env::var("BROADCAST_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(16);
+
+        let big_depth_min_qty = env::var("BIG_DEPTH_MIN_QTY")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let big_depth_min_notional = env::var("BIG_DEPTH_MIN_NOTIONAL")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let big_depth_min_pressure_pct = env::var("BIG_DEPTH_MIN_PRESSURE_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.0);
+
+        let disable_depth_stream = env::var("DISABLE_DEPTH_STREAM")
+            .map(|v| {
+                // Trim surrounding whitespace and optional surrounding quotes
+                // (e.g. DISABLE_DEPTH_STREAM="true" in some .env parsers keeps the quotes)
+                let trimmed = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                matches!(trimmed.as_str(), "1" | "true" | "yes")
+            })
+            .unwrap_or(false);
+
+        Config {
+            symbols,
+            port,
+            broadcast_capacity,
+            big_depth_min_qty,
+            big_depth_min_notional,
+            big_depth_min_pressure_pct,
+            disable_depth_stream,
+        }
+    }
+
+    /// Helper: load per-symbol env variable, fallback to default
+    fn load_symbol_env(symbol: &str, key: &str, default: f64) -> f64 {
+        let env_key = format!("{}_{}", symbol.to_uppercase(), key);
+        env::var(&env_key)
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(default)
+    }
+}
+
+
+
+FILE: ./src/binance.rs
+------------------------
+// File: src/binance.rs
+use crate::config::SymbolConfig;
+use crate::json_helpers::parse_combined_data;
+use chrono::Utc;
+use tokio::sync::broadcast;
+
+#[derive(Debug, serde::Deserialize)]
+pub struct AggTrade {
+    pub s: String,
+    pub p: String,
+    pub q: String,
+    #[serde(rename = "T")]
+    pub t: u64,
+    pub m: bool,
+}
+
+pub fn parse_agg_trade(msg: &str) -> Option<AggTrade> {
+    parse_combined_data(msg)
+}
+
+pub fn calc_spike(last_price: Option<f64>, current: f64) -> f64 {
+    last_price
+        .map(|last| ((current - last).abs() / last) * 100.0)
+        .unwrap_or(0.0)
+}
+
+pub async fn log_and_broadcast(
+    tx: &broadcast::Sender<String>,
+    agg: &AggTrade,
+    spike: f64,
+    cfg: &SymbolConfig,
+) {
+    let price: f64 = agg.p.parse().unwrap_or(0.0);
+    let qty: f64 = agg.q.parse().unwrap_or(0.0);
+
+    if qty >= cfg.big_trade_qty || spike >= cfg.spike_pct {
+        let delay_ms = Utc::now().timestamp_millis() - agg.t as i64;
+
+        let log_msg = format!(
+            "[AGG_TRADE] {} - Price: {:.2}, Qty: {:.4}, Spike: {:.4}%, BuyerMaker: {}, Delay: {} ms",
+            agg.s.to_uppercase(),
+            price,
+            qty,
+            spike,
+            agg.m,
+            delay_ms
+        );
+
+        println!("{}", log_msg);
+        let _ = tx.send(log_msg);
+    }
+}
+
+#[cfg(test)]
+#[path = "binance_tests.rs"]
+mod tests;
+
+
+
+FILE: ./src/json_helpers.rs
+------------------------
+#[derive(Debug, serde::Deserialize)]
+pub struct CombinedStreamMsg<T> {
+    pub data: T,
+}
+
+pub fn parse_combined_data<T>(msg: &str) -> Option<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let wrapper: CombinedStreamMsg<serde_json::Value> = match serde_json::from_str(msg) {
+        Ok(wrapper) => wrapper,
+        Err(err) => {
+            let snippet: String = msg.chars().take(180).collect();
+            let suffix = if msg.chars().count() > 180 { "..." } else { "" };
+            eprintln!(
+                "[parse_combined_data:{}] invalid JSON: {} payload='{}{}'",
+                std::any::type_name::<T>(),
+                err,
+                snippet,
+                suffix
+            );
+            return None;
+        }
+    };
+
+    serde_json::from_value(wrapper.data).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_combined_data;
+
+    #[derive(Debug, serde::Deserialize)]
+    struct AggTradeLike {
+        p: String,
+    }
+
+    #[test]
+    fn parse_combined_data_accepts_matching_payload() {
+        let payload = r#"{"stream":"btcusdt@aggTrade","data":{"p":"43000.50"}}"#;
+        let parsed: Option<AggTradeLike> = parse_combined_data(payload);
+
+        assert_eq!(parsed.expect("payload should parse").p, "43000.50");
+    }
+
+    #[test]
+    fn parse_combined_data_rejects_non_matching_data_shape() {
+        let payload = r#"{"stream":"btcusdt@depth@100ms","data":{"b":[["24100.10","1.20"]],"a":[["24100.20","0.80"]]}}"#;
+        let parsed: Option<AggTradeLike> = parse_combined_data(payload);
+
+        assert!(parsed.is_none());
+    }
+}
+
+
+
+FILE: ./src/lib.rs
+------------------------
+pub mod binance;
+pub mod binance_depth;
+pub mod config;
+pub mod json_helpers;
+pub mod refactor;
+pub mod time_helpers;
+pub mod ws_helpers;
+
+
+
+FILE: ./src/binance_depth_tests.rs
+------------------------
+use super::*;
+
+#[test]
+fn parse_depth_update_from_combined_stream() {
+    let msg = r#"{"stream":"btcusdt@depth@100ms","data":{"e":"depthUpdate","E":1672515782136,"s":"BTCUSDT","U":157,"u":160,"b":[["24100.10","1.20"]],"a":[["24100.20","0.80"]]}}"#;
+    let depth = parse_depth_update(msg).expect("depth should parse");
+
+    assert_eq!(depth.symbol, "BTCUSDT");
+    assert_eq!(depth.event_time, 1672515782136);
+    assert_eq!(depth.first_update_id, 157);
+    assert_eq!(depth.final_update_id, 160);
+    assert_eq!(depth.bids[0], ["24100.10".to_string(), "1.20".to_string()]);
+    assert_eq!(depth.asks[0], ["24100.20".to_string(), "0.80".to_string()]);
+}
+
+#[test]
+fn parse_depth_level_rejects_non_finite_and_non_positive_values() {
+    let invalid_nan = ["NaN".to_string(), "5.0".to_string()];
+    let invalid_inf = ["24100.10".to_string(), "inf".to_string()];
+    let invalid_zero = ["24100.10".to_string(), "0".to_string()];
+    let invalid_negative = ["-1".to_string(), "1.0".to_string()];
+
+    assert!(parse_depth_level(&invalid_nan).is_none());
+    assert!(parse_depth_level(&invalid_inf).is_none());
+    assert!(parse_depth_level(&invalid_zero).is_none());
+    assert!(parse_depth_level(&invalid_negative).is_none());
+}
+
+#[test]
+fn collect_big_levels_orders_by_notional_and_limits_matches() {
+    let levels = vec![
+        ["24100.10".to_string(), "1.0".to_string()],
+        ["24100.00".to_string(), "2.0".to_string()],
+        ["24000.00".to_string(), "5.0".to_string()],
+    ];
+
+    let matches = collect_big_levels(&levels, 1.0, 2);
+
+    assert_eq!(matches.len(), 2);
+    assert_eq!(matches[0].price, 24000.0);
+    assert_eq!(matches[0].qty, 5.0);
+    assert_eq!(matches[1].price, 24100.0);
+    assert_eq!(matches[1].qty, 2.0);
+}
+
+#[test]
+fn collect_big_levels_skips_malformed_levels() {
+    let levels = vec![
+        ["oops".to_string(), "2.0".to_string()],
+        ["24100.00".to_string(), "bad".to_string()],
+        ["24100.50".to_string(), "2.5".to_string()],
+    ];
+
+    let matches = collect_big_levels(&levels, 2.0, 10);
+
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].price, 24100.50);
+    assert_eq!(matches[0].qty, 2.5);
+}
+
+#[test]
+fn is_big_depth_update_requires_any_side_match() {
+    let none: Vec<ParsedDepthLevel> = vec![];
+    let some = vec![ParsedDepthLevel {
+        price: 24100.10,
+        qty: 3.0,
+        notional: 72300.3,
+    }];
+
+    assert!(!is_big_depth_update(&none, &none));
+    assert!(is_big_depth_update(&some, &none));
+}
+
+#[test]
+fn passes_pressure_filter_accepts_balanced_when_disabled() {
+    assert!(passes_pressure_filter(50.0, 50.0, 0.0));
+}
+
+#[test]
+fn passes_pressure_filter_requires_directional_imbalance() {
+    assert!(!passes_pressure_filter(52.0, 48.0, 60.0));
+    assert!(passes_pressure_filter(70.0, 30.0, 60.0));
+    assert!(passes_pressure_filter(35.0, 65.0, 60.0));
+}
+
+#[test]
+fn passes_pressure_filter_clamps_out_of_range_values() {
+    assert!(passes_pressure_filter(120.0, -20.0, 60.0));
+    assert!(!passes_pressure_filter(-10.0, -5.0, 60.0));
+}
+
+#[test]
+fn format_depth_levels_uses_compact_representation() {
+    let levels = vec![
+        ParsedDepthLevel {
+            price: 24100.10,
+            qty: 12.5,
+            notional: 301251.25,
+        },
+        ParsedDepthLevel {
+            price: 24100.20,
+            qty: 10.0,
+            notional: 241002.0,
+        },
+    ];
+
+    assert_eq!(
+        format_depth_levels(&levels),
+        "24100.10 x 12.5000,24100.20 x 10.0000"
+    );
+    assert_eq!(format_depth_levels(&[]), "-");
+}
+
+#[test]
+fn format_pressure_visual_renders_balance_bar() {
+    assert_eq!(format_pressure_visual(0.0, 10), "░░░░░░░░░░");
+    assert_eq!(format_pressure_visual(50.0, 10), "█████░░░░░");
+    assert_eq!(format_pressure_visual(100.0, 10), "██████████");
+}
+
+#[test]
+fn format_notional_compact_uses_suffixes() {
+    assert_eq!(format_notional_compact(980.0), "980");
+    assert_eq!(format_notional_compact(1_540.0), "1.5K");
+    assert_eq!(format_notional_compact(2_750_000.0), "2.75M");
+}
+
+#[test]
+fn build_depth_stream_names() {
+    let symbols = vec!["btcusdt".to_string(), "ETHUSDT".to_string()];
+    let streams = build_depth_streams(&symbols, 20, 100);
+
+    assert_eq!(
+        streams,
+        vec![
+            "btcusdt@depth20@100ms".to_string(),
+            "ethusdt@depth20@100ms".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn build_diff_depth_stream_names() {
+    let symbols = vec!["btcusdt".to_string(), "ETHUSDT".to_string()];
+    let streams = build_diff_depth_streams(&symbols, 100);
+
+    assert_eq!(
+        streams,
+        vec![
+            "btcusdt@depth@100ms".to_string(),
+            "ethusdt@depth@100ms".to_string(),
+        ]
+    );
+}
+
+
+
+FILE: ./src/ws_helpers.rs
+------------------------
+// File: src/ws_helpers.rs
+use futures_util::{SinkExt, StreamExt};
+use tokio::sync::broadcast;
+use tokio::time::{Duration, interval};
+use warp::ws::{Message, WebSocket};
+
+pub type BroadcastRx = broadcast::Receiver<String>;
+pub type WsTx = futures_util::stream::SplitSink<WebSocket, Message>;
+
+pub async fn send_heartbeat(ws_tx: &mut WsTx) -> Result<(), ()> {
+    ws_tx.send(Message::ping(vec![])).await.map_err(|_| ())
+}
+
+pub async fn forward_broadcast(ws_tx: &mut WsTx, rx: &mut BroadcastRx) -> Result<(), ()> {
+    if let Ok(msg) = rx.recv().await {
+        ws_tx.send(Message::text(msg)).await.map_err(|_| ())?;
+    }
+    Ok(())
+}
+
+pub async fn handle_incoming(ws_tx: &mut WsTx, msg: Message) -> bool {
+    if msg.is_ping() {
+        let _ = ws_tx.send(Message::pong(msg.as_bytes().to_vec())).await;
+    } else if msg.is_close() {
+        let _ = ws_tx.send(Message::close()).await;
+        return false;
+    }
+    true
+}
+
+pub async fn handle_client(ws: WebSocket, tx: broadcast::Sender<String>) {
+    let (mut ws_tx, mut ws_rx) = ws.split();
+    let mut rx = tx.subscribe();
+    let mut heartbeat = interval(Duration::from_secs(15));
+
+    loop {
+        tokio::select! {
+            _ = heartbeat.tick() => {
+                if send_heartbeat(&mut ws_tx).await.is_err() {
+                    break;
+                }
+            }
+            Ok(_) = rx.recv() => {
+                if forward_broadcast(&mut ws_tx, &mut rx).await.is_err() {
+                    break;
+                }
+            }
+            Some(Ok(msg)) = ws_rx.next() => {
+                if !handle_incoming(&mut ws_tx, msg).await {
+                    break;
+                }
+            }
+        }
+    }
+
+    println!("Client disconnected");
+}
+
+
+
+FILE: ./src/bin/fetch_agg.rs
+------------------------
+use reqwest::Client;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::Deserialize;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Debug, Deserialize)]
+struct AggTrade {
+    a: u64,    // trade_id
+    p: String, // price
+    q: String, // quantity
+    #[serde(rename = "T")]
+    t: u64, // timestamp (ms)
+    m: bool,   // is_buyer_maker
+}
+
+fn get_last_trade_id(conn: &Connection, symbol: &str) -> rusqlite::Result<Option<u64>> {
+    // query_row returns Result<T, Error>
+    // optional() converts Result<T, Error> -> Result<Option<T>, Error>
+    let last_id_opt: Option<Option<u64>> = conn
+        .query_row(
+            "SELECT MAX(trade_id) FROM agg_trades WHERE symbol = ?1",
+            [symbol],
+            |row| row.get::<_, Option<u64>>(0), // NULL -> Option<u64>
+        )
+        .optional()?; // now we have Result<Option<Option<u64>>, Error>
+
+    // Flatten Option<Option<u64>> -> Option<u64>
+    Ok(last_id_opt.flatten())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let symbol = "BTCUSDT";
+
+    let mut conn = Connection::open("trades.db")?;
+    conn.execute_batch(
+        "
+        CREATE TABLE IF NOT EXISTS agg_trades (
+            trade_id INTEGER PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            price REAL NOT NULL,
+            qty REAL NOT NULL,
+            timestamp INTEGER NOT NULL,
+            is_buyer_maker INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_symbol_time
+        ON agg_trades(symbol, timestamp);
+        ",
+    )?;
+
+    let client = Client::new();
+
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
+
+    let one_day_ms = 24 * 60 * 60 * 1000;
+    let cutoff_time = now - one_day_ms;
+
+    println!("Starting resumable 1-day aggTrade ingestion...");
+
+    // Determine starting from_id
+    let mut from_id: u64 = if let Some(last_id) = get_last_trade_id(&conn, symbol)? {
+        println!("Resuming from trade_id {}", last_id);
+        last_id + 1
+    } else {
+        println!("No existing data. Bootstrapping from 1-day cutoff.");
+
+        let url = format!(
+            "https://api.binance.com/api/v3/aggTrades?symbol={}&startTime={}&limit=1",
+            symbol, cutoff_time
+        );
+
+        let trades: Vec<AggTrade> = client.get(&url).send().await?.json().await?;
+
+        if trades.is_empty() {
+            println!("No trades found.");
+            return Ok(());
+        }
+
+        trades[0].a
+    };
+
+    loop {
+        let url = format!(
+            "https://api.binance.com/api/v3/aggTrades?symbol={}&fromId={}&limit=1000",
+            symbol, from_id
+        );
+
+        let trades: Vec<AggTrade> = client.get(&url).send().await?.json().await?;
+
+        if trades.is_empty() {
+            break;
+        }
+
+        let tx = conn.transaction()?;
+        let mut last_id = from_id;
+        let mut reached_now = false;
+
+        for t in &trades {
+            if t.t > now {
+                reached_now = true;
+                break;
+            }
+
+            tx.execute(
+                "INSERT OR IGNORE INTO agg_trades
+                 (trade_id, symbol, price, qty, timestamp, is_buyer_maker)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    t.a,
+                    symbol,
+                    t.p.parse::<f64>()?,
+                    t.q.parse::<f64>()?,
+                    t.t,
+                    if t.m {
+                        1 // seller 
+                    } else {
+                        0 // buyer 
+                    }
+                ],
+            )?;
+
+            last_id = t.a;
+        }
+
+        tx.commit()?;
+
+        println!("Inserted up to trade_id {}", last_id);
+
+        if reached_now || trades.len() < 1000 {
+            break;
+        }
+
+        from_id = last_id + 1;
+    }
+
+    println!("Done.");
+
+    Ok(())
+}
+
+
+
+FILE: ./src/bin/refactor.rs
+------------------------
+use feeder_service::binance::*;
+use feeder_service::binance_depth::*;
+use feeder_service::config::Config;
+use feeder_service::refactor::AppState;
+use feeder_service::ws_helpers::*;
+use futures_util::StreamExt;
+use local_ip_address::local_ip;
+use std::sync::{Arc, Mutex};
+use tokio::sync::broadcast;
+use tokio_tungstenite::connect_async;
+use warp::Filter;
+
+#[tokio::main]
+async fn main() {
+    dotenv::dotenv().ok();
+
+    let config = Config::load();
+    if config.symbols.is_empty() {
+        return;
+    }
+
+    let app_state = Arc::new(Mutex::new(AppState::new(config.clone())));
+
+    let symbols: Vec<String> = config
+        .symbols
+        .iter()
+        .map(|cfg| cfg.symbol.clone())
+        .collect();
+
+    let (tx, _rx) = broadcast::channel(config.broadcast_capacity);
+
+    // Spawn Warp server for websocket clients
+    let ws_route = warp::path("aggTrade").and(warp::ws()).map({
+        let tx = tx.clone();
+        move |ws: warp::ws::Ws| {
+            let tx_inner = tx.clone();
+            ws.on_upgrade(move |socket| handle_client(socket, tx_inner))
+        }
+    });
+
+    let ip_display = local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    println!(
+        "WebSocket server running on ws://{}:{}/aggTrade",
+        ip_display, config.port
+    );
+
+    println!(
+        "Depth filters => min_qty: {}, min_notional: {}, min_pressure: {}",
+        config.big_depth_min_qty, config.big_depth_min_notional, config.big_depth_min_pressure_pct
+    );
+
+    tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
+
+    // Build Binance streams: aggTrade for each symbol + diff depth streams
+    let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
+    streams.extend(build_diff_depth_streams(&symbols, 100));
+
+    let url = format!(
+        "wss://data-stream.binance.vision/stream?streams={}",
+        streams.join("/")
+    );
+    println!("Connecting to Binance: {}", url);
+
+    let (ws_stream, _) = connect_async(&url)
+        .await
+        .expect("Failed to connect to Binance");
+    let mut read = ws_stream;
+
+    // Main loop: read messages from Binance websocket
+    while let Some(msg) = read.next().await {
+        if let Ok(msg) = msg {
+            if !msg.is_text() {
+                continue;
+            }
+
+            let payload = match msg.to_text() {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+
+            // 1) aggTrade messages
+            if let Some(agg) = parse_agg_trade(payload) {
+                let mut state = app_state.lock().unwrap();
+                state.process_agg_trade(&agg, &tx).await;
+                continue;
+            }
+
+            // 2) depth updates
+            if let Some(depth) = parse_depth_update(payload) {
+                let mut state = app_state.lock().unwrap();
+                state.process_depth_update(&depth, &tx);
+                continue;
+            }
+
+            // Unknown / unhandled stream messages (optional logging controlled by env)
+            if std::env::var_os("LOG_UNKNOWN_STREAM_MESSAGES").is_some() {
+                let snippet: String = payload.chars().take(180).collect();
+                let suffix = if payload.chars().count() > 180 {
+                    "..."
+                } else {
+                    ""
+                };
+                eprintln!("[stream] unhandled text message: '{}{}'", snippet, suffix);
+            }
+        }
+    }
+}
+
+
+
+FILE: ./src/bin/ws_listener.rs
+------------------------
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::connect_async;
+use tokio_tungstenite::tungstenite::Message;
+
+#[tokio::main]
+async fn main() {
+    let url = "ws://localhost:8080/aggTrade";
+    println!("Connecting to {}", url);
+
+    let (ws_stream, _) = connect_async(url).await.expect("Failed to connect");
+    println!("Connected!");
+
+    let (mut write, mut read) = ws_stream.split();
+
+    while let Some(msg) = read.next().await {
+        match msg {
+            Ok(Message::Text(txt)) => println!("Received: {}", txt),
+            Ok(Message::Binary(bin)) => println!("Received binary: {:?}", bin),
+            Ok(Message::Ping(payload)) => {
+                println!("Ping received, sending Pong...");
+                // Respond to ping
+                if let Err(e) = write.send(Message::Pong(payload)).await {
+                    eprintln!("Failed to send Pong: {}", e);
+                    break;
+                }
+            }
+            Ok(Message::Pong(_)) => println!("Pong received"),
+            Ok(Message::Close(frame)) => {
+                println!("Connection closed by server: {:?}", frame);
+                // Reply with Close to complete handshake
+                let _ = write.send(Message::Close(frame)).await;
+                break;
+            }
+            Ok(other) => println!("Other message received: {:?}", other),
+            Err(e) => {
+                eprintln!("WebSocket error: {}", e);
+                break;
+            }
+        }
+    }
+
+    println!("Listener exited");
+}
+
+
+
+FILE: ./src/main.rs
+------------------------
+use feeder_service::binance::*;
+use feeder_service::binance_depth::*;
+use feeder_service::config::Config;
+use feeder_service::ws_helpers::*;
+use futures_util::StreamExt;
+use local_ip_address::local_ip;
+use std::collections::HashMap;
+use tokio::sync::broadcast;
+use tokio_tungstenite::connect_async;
+use warp::Filter;
+
+use feeder_service::refactor::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
+
+#[tokio::main]
+async fn main() {
+    dotenv::dotenv().ok();
+
+    let config = Config::load();
+    if config.symbols.is_empty() {
+        return;
+    }
+
+    let enable_depth = std::env::var("ENABLE_DEPTH")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false); // default enabled
+
+    // Maps and state
+    let mut config_map: HashMap<String, _> = HashMap::new();
+    let mut last_prices: HashMap<String, f64> = HashMap::new();
+    let mut big_move_detectors: HashMap<String, BigMoveDetector> = HashMap::new();
+
+    // Symbol list (lowercase used later)
+    let symbols: Vec<String> = config
+        .symbols
+        .iter()
+        .map(|cfg| cfg.symbol.clone())
+        .collect();
+
+    for cfg in &config.symbols {
+        println!(
+            "Symbol: {} => Big Trade Qty: {}, Spike %: {}",
+            cfg.symbol.to_uppercase(),
+            cfg.big_trade_qty,
+            cfg.spike_pct
+        );
+        config_map.insert(cfg.symbol.clone(), cfg.clone());
+        // instantiate detector for each symbol (preserve previous behaviour if used later)
+        big_move_detectors.insert(
+            cfg.symbol.to_lowercase(),
+            BigMoveDetector::new(5, 75.0, 0.0, 3),
+        );
+    }
+
+    let (tx, _rx) = broadcast::channel(config.broadcast_capacity);
+
+    // Spawn Warp server for websocket clients
+    let ws_route = warp::path("aggTrade").and(warp::ws()).map({
+        let tx = tx.clone();
+        move |ws: warp::ws::Ws| {
+            let tx_inner = tx.clone();
+            ws.on_upgrade(move |socket| handle_client(socket, tx_inner))
+        }
+    });
+
+    let ip_display = local_ip()
+        .map(|ip| ip.to_string())
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+
+    println!(
+        "WebSocket server running on ws://{}:{}/aggTrade",
+        ip_display, config.port
+    );
+
+    if config.disable_depth_stream {
+        println!(
+            "Depth stream DISABLED (DISABLE_DEPTH_STREAM raw value: {:?})",
+            std::env::var("DISABLE_DEPTH_STREAM").unwrap_or_default()
+        );
+    } else {
+        println!(
+            "Depth filters => min_qty: {}, min_notional: {}, min_pressure: {}",
+            config.big_depth_min_qty,
+            config.big_depth_min_notional,
+            config.big_depth_min_pressure_pct
+        );
+    }
+
+    tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
+
+    // Build Binance streams: aggTrade for each symbol + diff depth streams (unless disabled)
+    let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
+    if enable_depth {
+        streams.extend(build_diff_depth_streams(&symbols, 100));
+    } else {
+        println!("[INFO] Depth streams are disabled by feature flag.");
+    }
+
+    let url = format!(
+        "wss://data-stream.binance.vision/stream?streams={}",
+        streams.join("/")
+    );
+    println!("Connecting to Binance: {}", url);
+
+    let (ws_stream, _) = connect_async(&url)
+        .await
+        .expect("Failed to connect to Binance");
+    let mut read = ws_stream;
+
+    // Main loop: read messages from Binance websocket
+    while let Some(msg) = read.next().await {
+        if let Ok(msg) = msg {
+            if !msg.is_text() {
+                continue;
+            }
+
+            let payload = match msg.to_text() {
+                Ok(text) => text,
+                Err(_) => continue,
+            };
+
+            // 1) aggTrade messages
+            if let Some(agg) = parse_agg_trade(payload) {
+                process_agg_trade(&agg, &config_map, &mut last_prices, &tx).await;
+                continue;
+            }
+
+            // 2) depth updates (skipped when DISABLE_DEPTH_STREAM is set)
+            if !config.disable_depth_stream {
+                if let Some(depth) = parse_depth_update(payload) {
+                    process_depth_update(
+                        &depth,
+                        &config_map,
+                        &config,
+                        &mut big_move_detectors,
+                        &tx,
+                    );
+                    continue;
+                }
+            }
+
+            // Unknown / unhandled stream messages (optional logging controlled by env)
+            if std::env::var_os("LOG_UNKNOWN_STREAM_MESSAGES").is_some() {
+                let snippet: String = payload.chars().take(180).collect();
+                let suffix = if payload.chars().count() > 180 {
+                    "..."
+                } else {
+                    ""
+                };
+                eprintln!("[stream] unhandled text message: '{}{}'", snippet, suffix);
+            }
+        }
+    }
+}
+
+async fn process_agg_trade(
+    agg: &feeder_service::binance::AggTrade,
+    config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
+    last_prices: &mut HashMap<String, f64>,
+    tx: &broadcast::Sender<String>,
+) {
+    let symbol = agg.s.to_lowercase();
+    let cfg = match config_map.get(&symbol) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let current_price = agg.p.parse::<f64>().unwrap_or(0.0);
+    let prev_price = last_prices.get(&symbol).copied();
+    let spike = calc_spike(prev_price, current_price);
+
+    last_prices.insert(symbol.clone(), current_price);
+
+    // Preserve asynchronous logging & broadcasting behaviour
+    log_and_broadcast(tx, agg, spike, cfg).await;
+}
+
+fn process_depth_update(
+    depth: &feeder_service::binance_depth::DepthUpdate,
+    config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
+    config: &Config,
+    big_move_detectors: &mut HashMap<String, BigMoveDetector>,
+    tx: &broadcast::Sender<String>,
+) {
+    let symbol = depth.symbol.to_lowercase();
+    let cfg = match config_map.get(&symbol) {
+        Some(c) => c,
+        None => return,
+    };
+
+    let matched_bids = collect_big_levels(&depth.bids, cfg.big_trade_qty, 3);
+    let matched_asks = collect_big_levels(&depth.asks, cfg.big_trade_qty, 3);
+
+    if !is_big_depth_update(&matched_bids, &matched_asks) {
+        return;
+    }
+
+    let min_qty = config.big_depth_min_qty;
+    let min_notional = config.big_depth_min_notional;
+
+    let is_level_big = |price: f64, qty: f64| {
+        if min_qty <= 0.0 && min_notional <= 0.0 {
+            return true;
+        }
+        let qty_ok = min_qty > 0.0 && qty >= min_qty;
+        let notional_ok = min_notional > 0.0 && (price * qty) >= min_notional;
+        qty_ok || notional_ok
+    };
+
+    let extract_big_levels = |levels: &[[String; 2]]| {
+        levels
+            .iter()
+            .filter_map(|level| {
+                let price = level[0].parse::<f64>().ok()?;
+                let qty = level[1].parse::<f64>().ok()?;
+                if !price.is_finite() || !qty.is_finite() || price <= 0.0 || qty <= 0.0 {
+                    return None;
+                }
+                if !is_level_big(price, qty) {
+                    return None;
+                }
+                Some((price, qty))
+            })
+            .collect::<Vec<(f64, f64)>>()
+    };
+
+    let big_bids = extract_big_levels(&depth.bids);
+    let big_asks = extract_big_levels(&depth.asks);
+
+    if big_bids.is_empty() && big_asks.is_empty() {
+        return;
+    }
+
+    let bid_total_notional: f64 = big_bids.iter().map(|(price, qty)| price * qty).sum();
+    let ask_total_notional: f64 = big_asks.iter().map(|(price, qty)| price * qty).sum();
+    let total_notional = bid_total_notional + ask_total_notional;
+
+    let mut bid_pressure_pct = if total_notional > 0.0 {
+        (bid_total_notional / total_notional) * 100.0
+    } else {
+        0.0
+    };
+    bid_pressure_pct = bid_pressure_pct.clamp(0.0, 100.0);
+    let sell_pressure_pct = (100.0 - bid_pressure_pct).clamp(0.0, 100.0);
+
+    if !passes_pressure_filter(
+        bid_pressure_pct,
+        sell_pressure_pct,
+        config.big_depth_min_pressure_pct,
+    ) {
+        return;
+    }
+
+    let dominant_side = if bid_pressure_pct > sell_pressure_pct {
+        "BUY"
+    } else if sell_pressure_pct > bid_pressure_pct {
+        "SELL"
+    } else {
+        "BALANCED"
+    };
+
+    let top_bid = big_bids
+        .first()
+        .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+        .unwrap_or_else(|| "-".to_string());
+    let top_ask = big_asks
+        .first()
+        .map(|(price, qty)| format!("{:.2}x{:.3}", price, qty))
+        .unwrap_or_else(|| "-".to_string());
+
+    let pressure_bar = format_pressure_visual(bid_pressure_pct, 12);
+
+    let depth_msg = format!(
+        "[DEPTH] {} {} [{}] B:{:.1}% S:{:.1}% | notional {} vs {} | top {} / {}",
+        depth.symbol.to_uppercase(),
+        dominant_side,
+        pressure_bar,
+        bid_pressure_pct,
+        sell_pressure_pct,
+        format_notional_compact(bid_total_notional),
+        format_notional_compact(ask_total_notional),
+        top_bid,
+        top_ask
+    );
+
+    println!("{}", depth_msg);
+    let _ = tx.send(depth_msg.clone());
+
+    if let Some(detector) = big_move_detectors.get_mut(&symbol) {
+        let snap = DepthSnapshot {
+            bid_pressure_pct,
+            total_notional,
+        };
+
+        match detector.push(snap) {
+            BigMoveSignal::BullishBreakout {
+                avg_pressure,
+                total_notional,
+            } => {
+                let alert = format!(
+                    "[BIGMOVE] {} BULLISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                    depth.symbol.to_uppercase(),
+                    avg_pressure,
+                    total_notional
+                );
+                println!("{}", alert);
+                let _ = tx.send(alert);
+            }
+            BigMoveSignal::BearishBreakout {
+                avg_pressure,
+                total_notional,
+            } => {
+                let alert = format!(
+                    "[BIGMOVE] {} BEARISH BREAKOUT likely! avg_pressure={:.1}% notional={:.0}",
+                    depth.symbol.to_uppercase(),
+                    avg_pressure,
+                    total_notional
+                );
+                println!("{}", alert);
+                let _ = tx.send(alert);
+            }
+            BigMoveSignal::None => {}
+        }
+    }
+}
+
+
+
+FILE: ./src/binance_tests.rs
+------------------------
+use super::*;
+
+#[test]
+fn parse_agg_trade_from_combined_stream() {
+    let msg = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1710000000000,"s":"BTCUSDT","p":"43000.50","q":"0.1200","T":1710000000010,"m":true}}"#;
+    let agg = parse_agg_trade(msg).expect("agg trade should parse");
+
+    assert_eq!(agg.s, "BTCUSDT");
+    assert_eq!(agg.p, "43000.50");
+    assert_eq!(agg.q, "0.1200");
+    assert_eq!(agg.t, 1710000000010);
+    assert!(agg.m);
+}
+
+#[test]
+fn calc_spike_is_zero_when_no_previous_price() {
+    assert_eq!(calc_spike(None, 100.0), 0.0);
+}
+
+#[test]
+fn calc_spike_works_with_previous_price() {
+    let spike = calc_spike(Some(100.0), 101.0);
+    assert!((spike - 1.0).abs() < f64::EPSILON);
+}
+
+
+
