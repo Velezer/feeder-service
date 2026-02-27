@@ -29,19 +29,19 @@ jobs:
         id: mode
         run: |
           if [[ "${{ github.event_name }}" == "issues" ]]; then
-            echo "mode=create" >> $GITHUB_OUTPUT
-            echo "branch=ai-issue-${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
+            echo "mode=create" >> "$GITHUB_OUTPUT"
+            echo "branch=ai-issue-${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
           elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
             if [[ "${{ github.event.issue.pull_request }}" != "" ]]; then
-              echo "mode=refine" >> $GITHUB_OUTPUT
+              echo "mode=refine" >> "$GITHUB_OUTPUT"
             else
-              echo "skip=true" >> $GITHUB_OUTPUT
+              echo "skip=true" >> "$GITHUB_OUTPUT"
             fi
           elif [[ "${{ github.event_name }}" == "pull_request_review" ]]; then
             if [[ "${{ github.event.review.state }}" == "changes_requested" ]]; then
-              echo "mode=refine" >> $GITHUB_OUTPUT
+              echo "mode=refine" >> "$GITHUB_OUTPUT"
             else
-              echo "skip=true" >> $GITHUB_OUTPUT
+              echo "skip=true" >> "$GITHUB_OUTPUT"
             fi
           fi
 
@@ -53,16 +53,27 @@ jobs:
         if: steps.mode.outputs.mode == 'refine'
         run: |
           git fetch origin
-          git checkout ${{ github.event.pull_request.head.ref }}
+          git checkout "${{ github.event.pull_request.head.ref }}"
 
-      ############################################
-      # VECTOR-LIKE RETRIEVAL
-      ############################################
+      - name: Start context-service compressor
+        run: |
+          git clone --depth 1 https://github.com/Velezer/context-service context-service
+          nohup cargo run --manifest-path context-service/Cargo.toml > context-service.log 2>&1 &
 
-      - name: Prepare vector-like repository context
+          for _ in {1..30}; do
+            if curl -fsS "http://127.0.0.1:8080/context" >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "context-service failed to start"
+          cat context-service.log || true
+          exit 1
+
+      - name: Build compressed repository context
         run: |
           mkdir -p context
-          > context/files.txt
 
           if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
             TASK_TEXT="${{ github.event.issue.title }} ${{ github.event.issue.body }}"
@@ -71,21 +82,24 @@ jobs:
           fi
 
           KEYWORDS=$(echo "$TASK_TEXT" | tr '[:upper:]' '[:lower:]' | \
-            grep -oE '\b[a-z]{4,}\b' | sort | uniq | head -n 15)
+            grep -oE '\b[a-z]{4,}\b' | sort | uniq | head -n 20)
 
-          > context/file_scores.txt
+          : > context/file_scores.txt
 
           find . -type f \( \
             -name "*.rs" -o \
             -name "*.go" -o \
             -name "*.kt" -o \
-            -name "*.kts" \
+            -name "*.kts" -o \
+            -name "*.md" -o \
+            -name "*.yml" -o \
+            -name "*.yaml" \
           \) -not -path "./.git/*" \
             -not -path "./target/*" \
             -not -path "./build/*" \
             -not -path "./node_modules/*" \
-          | while read file; do
-
+            -not -path "./context-service/*" \
+          | while read -r file; do
               SCORE=0
               for word in $KEYWORDS; do
                 COUNT=$(grep -oi "$word" "$file" 2>/dev/null | wc -l)
@@ -95,111 +109,35 @@ jobs:
               if [[ $SCORE -gt 0 ]]; then
                 echo "$SCORE $file" >> context/file_scores.txt
               fi
-          done
+            done
 
-          SORTED=$(sort -nr context/file_scores.txt | head -n 3)
-
+          SORTED=$(sort -nr context/file_scores.txt | head -n 10)
           if [[ -z "$SORTED" ]]; then
-            SORTED=$(find . -type f \( \
-              -name "*.rs" -o \
-              -name "*.go" -o \
-              -name "*.kt" -o \
-              -name "*.kts" \
-            \) -not -path "./.git/*" | head -n 2 | awk '{print "1 "$0}')
+            SORTED=$(find . -type f \( -name "*.rs" -o -name "*.md" -o -name "*.yml" -o -name "*.yaml" \) \
+              -not -path "./.git/*" -not -path "./target/*" -not -path "./context-service/*" \
+              | head -n 5 | awk '{print "1 "$0}')
           fi
 
-          echo "$SORTED" | while read score file; do
-            echo "FILE: $file" >> context/files.txt
-            echo "------------------------" >> context/files.txt
-            head -n 150 "$file" >> context/files.txt
-            echo -e "\n\n" >> context/files.txt
-          done
+          while read -r score file; do
+            [ -z "$file" ] && continue
+            jq -n --arg p "$file" --arg c "$(head -n 300 "$file")" \
+              '{path: $p, content: $c}'
+          done <<< "$SORTED" | jq -s '.' > context/selected_files.json
 
-          truncate -s 10000 context/files.txt
+          jq -n \
+            --arg context "$TASK_TEXT" \
+            --argjson files "$(cat context/selected_files.json)" \
+            --argjson max_tokens 1800 \
+            '{context: $context, files: $files, max_tokens: $max_tokens}' > context/compress_request.json
 
-      ############################################
-      # PER-FILE COMPRESSION
-      ############################################
+          curl -fsS "http://127.0.0.1:8080/context/compress" \
+            -H 'Content-Type: application/json' \
+            -d @context/compress_request.json > context/compress_response.json
 
-      - name: Compress context per file
-        env:
-          LM_URL: ${{ secrets.LMSTUDIO_URL }}
-          LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
-        run: |
-          mkdir -p context/summaries
-          rm -f context/summaries/*
+          jq -r '.compressed_context' context/compress_response.json > context/files.txt
+          truncate -s 7000 context/files.txt
 
-          awk '/^FILE: /{
-                 if (out) close(out);
-                 gsub("FILE: ","");
-                 out="context/summaries/" NR ".tmp";
-                 print "FILE: " $0 > out;
-                 next
-               }
-               { print >> out }' context/files.txt
-
-          > context/summaries/merged.txt
-
-          for file in context/summaries/*.tmp; do
-            RAW_CONTENT=$(cat "$file")
-
-            SUMMARY_PROMPT="Compress this code structurally.
-
-            Keep:
-            - File name
-            - Public structs/classes
-            - Function signatures
-            - Core logic summary
-            
-            Remove:
-            - Imports unless critical
-            - Comments
-            - Boilerplate
-            
-            Return concise summary only.
-            
-            CODE:
-            $RAW_CONTENT"
-
-            RESPONSE=$(curl -s "$LM_URL/v1/chat/completions" \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $LM_KEY" \
-              -d "$(jq -n \
-                --arg prompt "$SUMMARY_PROMPT" \
-                '{
-                  model: "local-model",
-                  temperature: 0.0,
-                  messages: [
-                    { role: "user", content: $prompt }
-                  ]
-                }'
-              )"
-            )
-
-            CONTENT=$(jq -r '
-              if .choices[0].message.content then
-                .choices[0].message.content
-              elif .choices[0].text then
-                .choices[0].text
-              else
-                empty
-              end
-            ' <<< "$RESPONSE")
-
-            if [ -n "$CONTENT" ]; then
-              echo "$CONTENT" >> context/summaries/merged.txt
-              echo -e "\n\n" >> context/summaries/merged.txt
-            fi
-          done
-
-          truncate -s 6000 context/summaries/merged.txt
-          cp context/summaries/merged.txt context/files.txt
-
-      ############################################
-      # FINAL LLM MODIFICATION CALL
-      ############################################
-
-            - name: Call Local LLM
+      - name: Call Local LLM
         env:
           LM_URL: ${{ secrets.LMSTUDIO_URL }}
           LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
@@ -218,13 +156,13 @@ jobs:
           No markdown.
           No explanation.
           No text before or after JSON.
-          
+
           Task:
           $TASK
-          
+
           Repository Summary:
           $(cat context/files.txt)
-          
+
           Format:
           {
             \"MODIFIED_FILES\": {\"path/to/file.rs\": \"full new file content\"},
@@ -249,7 +187,6 @@ jobs:
 
           echo "$RESPONSE" > raw_response.json
 
-          # Extract model text safely
           CONTENT=$(jq -r '
             if .choices[0].message.content then
               .choices[0].message.content
@@ -265,10 +202,7 @@ jobs:
             exit 1
           fi
 
-          # Remove null bytes (critical fix)
           CLEANED=$(printf "%s" "$CONTENT" | tr -d '\000')
-
-          # Extract first JSON object only
           JSON_ONLY=$(echo "$CLEANED" | sed -n '/{/,/}/p')
 
           echo "$JSON_ONLY" > parsed.json
@@ -276,15 +210,10 @@ jobs:
           echo "=== PARSED JSON ==="
           cat parsed.json
 
-          # Validate JSON strictly
           jq empty parsed.json || {
             echo "Invalid JSON from model"
             exit 1
           }
-
-      ############################################
-      # APPLY CHANGES
-      ############################################
 
       - name: Apply file updates
         run: |
@@ -309,7 +238,7 @@ jobs:
           fi
 
           git commit -m "AI update"
-          git push --set-upstream origin $(git branch --show-current)
+          git push --set-upstream origin "$(git branch --show-current)"
 
       - name: Create Pull Request
         if: steps.mode.outputs.mode == 'create'
