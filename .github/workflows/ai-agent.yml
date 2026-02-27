@@ -25,10 +25,6 @@ jobs:
       - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
 
-      ############################################
-      # Determine Event Type
-      ############################################
-
       - name: Set Mode (create or refine)
         id: mode
         run: |
@@ -38,14 +34,12 @@ jobs:
           elif [[ "${{ github.event_name }}" == "issue_comment" ]]; then
             if [[ "${{ github.event.issue.pull_request }}" != "" ]]; then
               echo "mode=refine" >> $GITHUB_OUTPUT
-              echo "branch=${{ github.event.issue.number }}" >> $GITHUB_OUTPUT
             else
               echo "skip=true" >> $GITHUB_OUTPUT
             fi
           elif [[ "${{ github.event_name }}" == "pull_request_review" ]]; then
             if [[ "${{ github.event.review.state }}" == "changes_requested" ]]; then
               echo "mode=refine" >> $GITHUB_OUTPUT
-              echo "branch=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
             else
               echo "skip=true" >> $GITHUB_OUTPUT
             fi
@@ -53,10 +47,16 @@ jobs:
 
       - name: Stop if not AI-related
         if: steps.mode.outputs.skip == 'true'
-        run: echo "Not an AI-triggered event." && exit 0
+        run: exit 0
+
+      - name: Checkout PR branch
+        if: steps.mode.outputs.mode == 'refine'
+        run: |
+          git fetch origin
+          git checkout ${{ github.event.pull_request.head.ref }}
 
       ############################################
-      # Create Mode (New PR)
+      # VECTOR-LIKE RETRIEVAL
       ############################################
 
       - name: Prepare vector-like repository context
@@ -70,20 +70,8 @@ jobs:
             TASK_TEXT="${{ github.event.comment.body }} ${{ github.event.review.body }}"
           fi
 
-          echo "=== TASK TEXT ==="
-          echo "$TASK_TEXT"
-          echo "================="
-
-          # Extract keywords (length >=4)
           KEYWORDS=$(echo "$TASK_TEXT" | tr '[:upper:]' '[:lower:]' | \
             grep -oE '\b[a-z]{4,}\b' | sort | uniq | head -n 15)
-
-          echo "=== KEYWORDS ==="
-          echo "$KEYWORDS"
-          echo "================"
-
-          # Score files
-          echo "Scoring files..."
 
           > context/file_scores.txt
 
@@ -99,7 +87,6 @@ jobs:
           | while read file; do
 
               SCORE=0
-
               for word in $KEYWORDS; do
                 COUNT=$(grep -oi "$word" "$file" 2>/dev/null | wc -l)
                 SCORE=$((SCORE + COUNT))
@@ -110,11 +97,9 @@ jobs:
               fi
           done
 
-          # Sort by score descending
           SORTED=$(sort -nr context/file_scores.txt | head -n 3)
 
           if [[ -z "$SORTED" ]]; then
-            echo "No keyword matches. Falling back to first 2 files."
             SORTED=$(find . -type f \( \
               -name "*.rs" -o \
               -name "*.go" -o \
@@ -123,71 +108,98 @@ jobs:
             \) -not -path "./.git/*" | head -n 2 | awk '{print "1 "$0}')
           fi
 
-          echo "=== TOP FILES ==="
-          echo "$SORTED"
-          echo "================="
-
-          COUNT=0
-
           echo "$SORTED" | while read score file; do
-            if [[ $COUNT -ge 3 ]]; then
-              break
-            fi
-
-            echo "FILE: $file (score: $score)" >> context/files.txt
-            echo "------------------------" >> context/files.txt
-
-            # Take only first 150 lines to control size
-            head -n 150 "$file" >> context/files.txt
-
-            echo -e "\n\n" >> context/files.txt
-
-            COUNT=$((COUNT+1))
-          done
-
-          # Hard cap size (~10k chars safe for 2k context model)
-          truncate -s 10000 context/files.txt
-
-          echo "=== FINAL CONTEXT ==="
-          cat context/files.txt
-          echo "====================="
-          echo "Context size (bytes):"
-          wc -c context/files.txt
-
-      ############################################
-      # Refine Mode (Existing PR)
-      ############################################
-
-      - name: Checkout PR branch
-        if: steps.mode.outputs.mode == 'refine'
-        run: |
-          git fetch origin
-          git checkout ${{ github.event.pull_request.head.ref || steps.mode.outputs.branch }}
-
-      - name: Prepare context (Refine Mode)
-        if: steps.mode.outputs.mode == 'refine'
-        run: |
-          mkdir context
-          git diff origin/${{ github.event.repository.default_branch }} > context/diff.txt
-
-          find . -type f \( \
-            -name "*.rs" -o \
-            -name "*.go" -o \
-            -name "*.kt" -o \
-            -name "*.kts" \
-          \) -not -path "./.git/*" | head -n 15 | while read file; do
             echo "FILE: $file" >> context/files.txt
             echo "------------------------" >> context/files.txt
-            cat "$file" >> context/files.txt
+            head -n 150 "$file" >> context/files.txt
             echo -e "\n\n" >> context/files.txt
           done
 
+          truncate -s 10000 context/files.txt
+
       ############################################
-      # Call LM Studio
+      # PER-FILE COMPRESSION
+      ############################################
+
+      - name: Compress context per file
+        env:
+          LM_URL: ${{ secrets.LMSTUDIO_URL }}
+          LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
+        run: |
+          mkdir -p context/summaries
+          rm -f context/summaries/*
+
+          awk '/^FILE: /{
+                 if (out) close(out);
+                 gsub("FILE: ","");
+                 out="context/summaries/" NR ".tmp";
+                 print "FILE: " $0 > out;
+                 next
+               }
+               { print >> out }' context/files.txt
+
+          > context/summaries/merged.txt
+
+          for file in context/summaries/*.tmp; do
+            RAW_CONTENT=$(cat "$file")
+
+            SUMMARY_PROMPT="Compress this code structurally.
+
+            Keep:
+            - File name
+            - Public structs/classes
+            - Function signatures
+            - Core logic summary
+            
+            Remove:
+            - Imports unless critical
+            - Comments
+            - Boilerplate
+            
+            Return concise summary only.
+            
+            CODE:
+            $RAW_CONTENT"
+
+            RESPONSE=$(curl -s "$LM_URL/v1/chat/completions" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $LM_KEY" \
+              -d "$(jq -n \
+                --arg prompt "$SUMMARY_PROMPT" \
+                '{
+                  model: "local-model",
+                  temperature: 0.0,
+                  messages: [
+                    { role: "user", content: $prompt }
+                  ]
+                }'
+              )"
+            )
+
+            CONTENT=$(jq -r '
+              if .choices[0].message.content then
+                .choices[0].message.content
+              elif .choices[0].text then
+                .choices[0].text
+              else
+                empty
+              end
+            ' <<< "$RESPONSE")
+
+            if [ -n "$CONTENT" ]; then
+              echo "$CONTENT" >> context/summaries/merged.txt
+              echo -e "\n\n" >> context/summaries/merged.txt
+            fi
+          done
+
+          truncate -s 6000 context/summaries/merged.txt
+          cp context/summaries/merged.txt context/files.txt
+
+      ############################################
+      # FINAL LLM MODIFICATION CALL
       ############################################
 
       - name: Call Local LLM
-        id: llm
         env:
           LM_URL: ${{ secrets.LMSTUDIO_URL }}
           LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
@@ -195,21 +207,21 @@ jobs:
           if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
             TASK="${{ github.event.issue.title }}
 
-          ${{ github.event.issue.body }}"
-                    else
-                      TASK="Refine the PR based on this feedback:
-          
-          ${{ github.event.comment.body || github.event.review.body }}"
-                    fi
-          
-                    FULL_PROMPT="Return STRICT JSON only. No markdown. No explanation.
-          
+            ${{ github.event.issue.body }}"
+          else
+            TASK="Refine the PR based on this feedback:
+
+            ${{ github.event.comment.body || github.event.review.body }}"
+          fi
+
+          FULL_PROMPT="Return STRICT JSON only.
+
           Task:
           $TASK
-          
-          Repository Context:
+
+          Repository Summary:
           $(cat context/files.txt)
-          
+
           Format:
           {
             \"MODIFIED_FILES\": {\"path/to/file.rs\": \"full new file content\"},
@@ -234,10 +246,6 @@ jobs:
 
           echo "$RESPONSE" > raw_response.json
 
-          echo "=== RAW RESPONSE ==="
-          cat raw_response.json
-          echo "===================="
-
           CONTENT=$(jq -r '
             if .choices[0].message.content then
               .choices[0].message.content
@@ -249,31 +257,19 @@ jobs:
           ' raw_response.json)
 
           if [ -z "$CONTENT" ]; then
-            echo "Model returned no usable content"
             exit 1
           fi
 
           echo "$CONTENT" | sed 's/```json//g' | sed 's/```//g' > parsed.json
 
-          echo "=== PARSED JSON ==="
-          cat parsed.json
-          echo "==================="
+          jq empty parsed.json || exit 1
 
-          jq empty parsed.json || { echo "Invalid JSON from model"; exit 1; }
-
-          COUNT=$(jq '.MODIFIED_FILES | length' parsed.json)
-
-          if [ "$COUNT" -eq 0 ]; then
-            echo "No files returned by model"
-            exit 1
-          fi
       ############################################
-      # Apply Changes
+      # APPLY CHANGES
       ############################################
 
       - name: Apply file updates
         run: |
-
           if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
             git checkout -b ai-issue-${{ github.event.issue.number }}
           fi
@@ -283,7 +279,6 @@ jobs:
           for file in $FILES; do
             mkdir -p "$(dirname "$file")"
             jq -r --arg f "$file" '.MODIFIED_FILES[$f]' parsed.json > "$file"
-            echo "Updated $file"
           done
 
           git config user.name "AI Agent"
@@ -292,16 +287,11 @@ jobs:
           git add .
 
           if git diff --cached --quiet; then
-            echo "No changes detected"
             exit 0
           fi
 
           git commit -m "AI update"
           git push --set-upstream origin $(git branch --show-current)
-
-      ############################################
-      # Create PR (only in create mode)
-      ############################################
 
       - name: Create Pull Request
         if: steps.mode.outputs.mode == 'create'
