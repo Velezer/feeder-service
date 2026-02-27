@@ -126,19 +126,40 @@ jobs:
             -H "Authorization: Bearer $LM_KEY" \
             -d @- <<EOF
           {
+            "model": "local-model",
+            "temperature": 0.1,
             "messages": [
               {
                 "role": "user",
-                "content": "You are an autonomous coding agent.\n\nTask:\n$TASK\n\nRepository Context:\n$(cat context/files.txt)\n\nReturn STRICT JSON:\n{\n  \"MODIFIED_FILES\": {\"path\": \"new content\"},\n  \"PR_TITLE\": \"title\",\n  \"PR_BODY\": \"body\"\n}"
+                "content": "Return STRICT JSON only. No markdown. No explanation.\n\nTask:\n$TASK\n\nRepository Context:\n$(cat context/files.txt)\n\nFormat:\n{\n  \"MODIFIED_FILES\": {\"path\": \"new content\"},\n  \"PR_TITLE\": \"title\",\n  \"PR_BODY\": \"body\"\n}"
               }
             ]
           }
           EOF
           )
 
-          echo "$RESPONSE" > response.json
-          CONTENT=$(jq -r '.choices[0].message.content' response.json)
-          echo "$CONTENT" > parsed.json
+          echo "$RESPONSE" > raw_response.json
+
+          # Extract assistant content
+          CONTENT=$(jq -r '.choices[0].message.content' raw_response.json)
+
+          # Remove possible markdown fences
+          CLEAN=$(echo "$CONTENT" | sed 's/```json//g' | sed 's/```//g')
+
+          echo "$CLEAN" > parsed.json
+
+          echo "Parsed JSON:"
+          cat parsed.json
+
+          # Validate JSON
+          jq empty parsed.json || { echo "Invalid JSON from model"; exit 1; }
+
+          # Validate MODIFIED_FILES exists
+          COUNT=$(jq '.MODIFIED_FILES | length' parsed.json)
+          if [ "$COUNT" -eq 0 ]; then
+            echo "No files returned by model"
+            exit 1
+          fi
 
       ############################################
       # Apply Changes
@@ -146,19 +167,29 @@ jobs:
 
       - name: Apply file updates
         run: |
+
           if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
             git checkout -b ai-issue-${{ github.event.issue.number }}
           fi
 
-          jq -r '.MODIFIED_FILES | to_entries[] | "\(.key)"' parsed.json | while read file; do
+          FILES=$(jq -r '.MODIFIED_FILES | keys[]' parsed.json)
+
+          for file in $FILES; do
             mkdir -p "$(dirname "$file")"
             jq -r --arg f "$file" '.MODIFIED_FILES[$f]' parsed.json > "$file"
+            echo "Updated $file"
           done
 
           git config user.name "AI Agent"
           git config user.email "actions@github.com"
 
           git add .
+
+          if git diff --cached --quiet; then
+            echo "No changes detected"
+            exit 0
+          fi
+
           git commit -m "AI update"
           git push --set-upstream origin $(git branch --show-current)
 
