@@ -126,8 +126,6 @@ jobs:
             -H "Authorization: Bearer $LM_KEY" \
             -d @- <<EOF
           {
-            "model": "local-model",
-            "temperature": 0.2,
             "messages": [
               {
                 "role": "user",
