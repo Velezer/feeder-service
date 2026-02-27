@@ -115,46 +115,71 @@ jobs:
           LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
         run: |
           if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
-            TASK="${{ github.event.issue.title }}\n\n${{ github.event.issue.body }}"
-          else
-            TASK="Refine the PR based on this feedback:\n\n${{ github.event.comment.body || github.event.review.body }}"
-          fi
+            TASK="${{ github.event.issue.title }}
 
-          # Escape repository context safely for JSON
-          CONTEXT=$(jq -Rs . < context/files.txt)
+          ${{ github.event.issue.body }}"
+                    else
+                      TASK="Refine the PR based on this feedback:
+          
+          ${{ github.event.comment.body || github.event.review.body }}"
+                    fi
+          
+                    FULL_PROMPT="Return STRICT JSON only. No markdown. No explanation.
+          
+          Task:
+          $TASK
+          
+          Repository Context:
+          $(cat context/files.txt)
+          
+          Format:
+          {
+            \"MODIFIED_FILES\": {\"path/to/file.rs\": \"full new file content\"},
+            \"PR_TITLE\": \"title\",
+            \"PR_BODY\": \"body\"
+          }"
 
           RESPONSE=$(curl -s "$LM_URL/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $LM_KEY" \
-            -d @- <<EOF
-            {
-              "model": "local-model",
-              "temperature": 0.1,
-              "messages": [
-                {
-                  "role": "user",
-                  "content": "Return STRICT JSON only. No markdown. No explanation.\n\nTask:\n$TASK\n\nRepository Context:\n" + $CONTEXT + "\n\nFormat:\n{\n  \"MODIFIED_FILES\": {\"path\": \"new content\"},\n  \"PR_TITLE\": \"title\",\n  \"PR_BODY\": \"body\"\n}"
-                }
-              ]
-            }
-          EOF
+            -d "$(jq -n \
+              --arg prompt "$FULL_PROMPT" \
+              '{
+                model: "local-model",
+                temperature: 0.1,
+                messages: [
+                  { role: "user", content: $prompt }
+                ]
+              }'
+            )"
           )
 
           echo "$RESPONSE" > raw_response.json
 
-          CONTENT=$(jq -r '.choices[0].message.content // empty' raw_response.json)
+          echo "=== RAW RESPONSE ==="
+          cat raw_response.json
+          echo "===================="
+
+          CONTENT=$(jq -r '
+            if .choices[0].message.content then
+              .choices[0].message.content
+            elif .choices[0].text then
+              .choices[0].text
+            else
+              empty
+            end
+          ' raw_response.json)
 
           if [ -z "$CONTENT" ]; then
             echo "Model returned no usable content"
             exit 1
           fi
 
-          CLEAN=$(echo "$CONTENT" | sed 's/```json//g' | sed 's/```//g')
+          echo "$CONTENT" | sed 's/```json//g' | sed 's/```//g' > parsed.json
 
-          echo "$CLEAN" > parsed.json
-
-          echo "Parsed JSON:"
+          echo "=== PARSED JSON ==="
           cat parsed.json
+          echo "==================="
 
           jq empty parsed.json || { echo "Invalid JSON from model"; exit 1; }
 
@@ -164,7 +189,6 @@ jobs:
             echo "No files returned by model"
             exit 1
           fi
-
       ############################################
       # Apply Changes
       ############################################
