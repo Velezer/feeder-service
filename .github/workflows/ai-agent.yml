@@ -114,36 +114,41 @@ jobs:
           LM_URL: ${{ secrets.LMSTUDIO_URL }}
           LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
         run: |
-
           if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
             TASK="${{ github.event.issue.title }}\n\n${{ github.event.issue.body }}"
           else
             TASK="Refine the PR based on this feedback:\n\n${{ github.event.comment.body || github.event.review.body }}"
           fi
 
-          RESPONSE=$(curl -s $LM_URL/v1/chat/completions \
+          # Escape repository context safely for JSON
+          CONTEXT=$(jq -Rs . < context/files.txt)
+
+          RESPONSE=$(curl -s "$LM_URL/v1/chat/completions" \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $LM_KEY" \
             -d @- <<EOF
-          {
-            "model": "local-model",
-            "temperature": 0.1,
-            "messages": [
-              {
-                "role": "user",
-                "content": "Return STRICT JSON only. No markdown. No explanation.\n\nTask:\n$TASK\n\nRepository Context:\n$(cat context/files.txt)\n\nFormat:\n{\n  \"MODIFIED_FILES\": {\"path\": \"new content\"},\n  \"PR_TITLE\": \"title\",\n  \"PR_BODY\": \"body\"\n}"
-              }
-            ]
-          }
+            {
+              "model": "local-model",
+              "temperature": 0.1,
+              "messages": [
+                {
+                  "role": "user",
+                  "content": "Return STRICT JSON only. No markdown. No explanation.\n\nTask:\n$TASK\n\nRepository Context:\n" + $CONTEXT + "\n\nFormat:\n{\n  \"MODIFIED_FILES\": {\"path\": \"new content\"},\n  \"PR_TITLE\": \"title\",\n  \"PR_BODY\": \"body\"\n}"
+                }
+              ]
+            }
           EOF
           )
 
           echo "$RESPONSE" > raw_response.json
 
-          # Extract assistant content
-          CONTENT=$(jq -r '.choices[0].message.content' raw_response.json)
+          CONTENT=$(jq -r '.choices[0].message.content // empty' raw_response.json)
 
-          # Remove possible markdown fences
+          if [ -z "$CONTENT" ]; then
+            echo "Model returned no usable content"
+            exit 1
+          fi
+
           CLEAN=$(echo "$CONTENT" | sed 's/```json//g' | sed 's/```//g')
 
           echo "$CLEAN" > parsed.json
@@ -151,11 +156,10 @@ jobs:
           echo "Parsed JSON:"
           cat parsed.json
 
-          # Validate JSON
           jq empty parsed.json || { echo "Invalid JSON from model"; exit 1; }
 
-          # Validate MODIFIED_FILES exists
           COUNT=$(jq '.MODIFIED_FILES | length' parsed.json)
+
           if [ "$COUNT" -eq 0 ]; then
             echo "No files returned by model"
             exit 1
