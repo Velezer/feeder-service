@@ -59,7 +59,7 @@ jobs:
       # Create Mode (New PR)
       ############################################
 
-      - name: Prepare intelligent repository context
+      - name: Prepare vector-like repository context
         run: |
           mkdir -p context
           > context/files.txt
@@ -70,63 +70,88 @@ jobs:
             TASK_TEXT="${{ github.event.comment.body }} ${{ github.event.review.body }}"
           fi
 
-          echo "Extracting keywords..."
+          echo "=== TASK TEXT ==="
+          echo "$TASK_TEXT"
+          echo "================="
 
-          # Extract lowercase keywords longer than 3 chars
+          # Extract keywords (length >=4)
           KEYWORDS=$(echo "$TASK_TEXT" | tr '[:upper:]' '[:lower:]' | \
-            grep -oE '\b[a-z]{4,}\b' | sort | uniq | head -n 10)
+            grep -oE '\b[a-z]{4,}\b' | sort | uniq | head -n 15)
 
-          echo "Keywords:"
+          echo "=== KEYWORDS ==="
           echo "$KEYWORDS"
+          echo "================"
 
-          MATCHED_FILES=""
+          # Score files
+          echo "Scoring files..."
 
-          # Try to find files matching keywords
-          for word in $KEYWORDS; do
-            FILES=$(find . -type f \( \
-              -name "*.rs" -o \
-              -name "*.go" -o \
-              -name "*.kt" -o \
-              -name "*.kts" \
-            \) -not -path "./.git/*" | grep -i "$word" || true)
+          > context/file_scores.txt
 
-            MATCHED_FILES="$MATCHED_FILES $FILES"
+          find . -type f \( \
+            -name "*.rs" -o \
+            -name "*.go" -o \
+            -name "*.kt" -o \
+            -name "*.kts" \
+          \) -not -path "./.git/*" \
+            -not -path "./target/*" \
+            -not -path "./build/*" \
+            -not -path "./node_modules/*" \
+          | while read file; do
+
+              SCORE=0
+
+              for word in $KEYWORDS; do
+                COUNT=$(grep -oi "$word" "$file" 2>/dev/null | wc -l)
+                SCORE=$((SCORE + COUNT))
+              done
+
+              if [[ $SCORE -gt 0 ]]; then
+                echo "$SCORE $file" >> context/file_scores.txt
+              fi
           done
 
-          # Remove duplicates
-          MATCHED_FILES=$(echo $MATCHED_FILES | tr ' ' '\n' | sort | uniq)
+          # Sort by score descending
+          SORTED=$(sort -nr context/file_scores.txt | head -n 3)
 
-          # Fallback if nothing matched
-          if [[ -z "$MATCHED_FILES" ]]; then
-            echo "No keyword match. Falling back to main files."
-            MATCHED_FILES=$(find . -type f \( \
+          if [[ -z "$SORTED" ]]; then
+            echo "No keyword matches. Falling back to first 2 files."
+            SORTED=$(find . -type f \( \
               -name "*.rs" -o \
               -name "*.go" -o \
               -name "*.kt" -o \
               -name "*.kts" \
-            \) -not -path "./.git/*" | head -n 3)
+            \) -not -path "./.git/*" | head -n 2 | awk '{print "1 "$0}')
           fi
 
-          echo "Selected files:"
-          echo "$MATCHED_FILES"
+          echo "=== TOP FILES ==="
+          echo "$SORTED"
+          echo "================="
 
           COUNT=0
 
-          for file in $MATCHED_FILES; do
+          echo "$SORTED" | while read score file; do
             if [[ $COUNT -ge 3 ]]; then
               break
             fi
 
-            echo "FILE: $file" >> context/files.txt
+            echo "FILE: $file (score: $score)" >> context/files.txt
             echo "------------------------" >> context/files.txt
 
+            # Take only first 150 lines to control size
             head -n 150 "$file" >> context/files.txt
+
             echo -e "\n\n" >> context/files.txt
 
             COUNT=$((COUNT+1))
           done
 
-          echo "Final context size:"
+          # Hard cap size (~10k chars safe for 2k context model)
+          truncate -s 10000 context/files.txt
+
+          echo "=== FINAL CONTEXT ==="
+          cat context/files.txt
+          echo "====================="
+          echo "Context size (bytes):"
           wc -c context/files.txt
 
       ############################################
