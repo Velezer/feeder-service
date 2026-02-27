@@ -59,22 +59,41 @@ jobs:
       # Create Mode (New PR)
       ############################################
 
-      - name: Prepare context (Create Mode)
-        if: steps.mode.outputs.mode == 'create'
+      - name: Prepare repository context
         run: |
-          mkdir context
+          mkdir -p context
+          > context/files.txt
 
+          echo "Collecting relevant files..."
+
+          # Select at most 5 source files
           find . -type f \( \
             -name "*.rs" -o \
             -name "*.go" -o \
             -name "*.kt" -o \
             -name "*.kts" \
-          \) -not -path "./.git/*" | head -n 15 | while read file; do
-            echo "FILE: $file" >> context/files.txt
-            echo "------------------------" >> context/files.txt
-            cat "$file" >> context/files.txt
-            echo -e "\n\n" >> context/files.txt
+          \) -not -path "./.git/*" \
+            -not -path "./target/*" \
+            -not -path "./build/*" \
+            -not -path "./node_modules/*" \
+            | head -n 5 | while read file; do
+
+              echo "FILE: $file" >> context/files.txt
+              echo "------------------------" >> context/files.txt
+
+              # Limit each file to first 200 lines
+              head -n 200 "$file" >> context/files.txt
+
+              echo -e "\n\n" >> context/files.txt
           done
+
+          echo "Truncating context to safe size..."
+
+          # Hard cap total context to 12000 characters (~1500 tokens)
+          truncate -s 12000 context/files.txt
+
+          echo "Final context size:"
+          wc -c context/files.txt
 
       ############################################
       # Refine Mode (Existing PR)
