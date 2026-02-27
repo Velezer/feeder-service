@@ -199,7 +199,7 @@ jobs:
       # FINAL LLM MODIFICATION CALL
       ############################################
 
-      - name: Call Local LLM
+            - name: Call Local LLM
         env:
           LM_URL: ${{ secrets.LMSTUDIO_URL }}
           LM_KEY: ${{ secrets.LMSTUDIO_API_KEY }}
@@ -215,13 +215,16 @@ jobs:
           fi
 
           FULL_PROMPT="Return STRICT JSON only.
-
+          No markdown.
+          No explanation.
+          No text before or after JSON.
+          
           Task:
           $TASK
-
+          
           Repository Summary:
           $(cat context/files.txt)
-
+          
           Format:
           {
             \"MODIFIED_FILES\": {\"path/to/file.rs\": \"full new file content\"},
@@ -246,6 +249,7 @@ jobs:
 
           echo "$RESPONSE" > raw_response.json
 
+          # Extract model text safely
           CONTENT=$(jq -r '
             if .choices[0].message.content then
               .choices[0].message.content
@@ -257,12 +261,26 @@ jobs:
           ' raw_response.json)
 
           if [ -z "$CONTENT" ]; then
+            echo "Model returned empty content"
             exit 1
           fi
 
-          echo "$CONTENT" | sed 's/```json//g' | sed 's/```//g' > parsed.json
+          # Remove null bytes (critical fix)
+          CLEANED=$(printf "%s" "$CONTENT" | tr -d '\000')
 
-          jq empty parsed.json || exit 1
+          # Extract first JSON object only
+          JSON_ONLY=$(echo "$CLEANED" | sed -n '/{/,/}/p')
+
+          echo "$JSON_ONLY" > parsed.json
+
+          echo "=== PARSED JSON ==="
+          cat parsed.json
+
+          # Validate JSON strictly
+          jq empty parsed.json || {
+            echo "Invalid JSON from model"
+            exit 1
+          }
 
       ############################################
       # APPLY CHANGES
