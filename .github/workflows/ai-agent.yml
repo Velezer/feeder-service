@@ -59,38 +59,72 @@ jobs:
       # Create Mode (New PR)
       ############################################
 
-      - name: Prepare repository context
+      - name: Prepare intelligent repository context
         run: |
           mkdir -p context
           > context/files.txt
 
-          echo "Collecting relevant files..."
+          if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
+            TASK_TEXT="${{ github.event.issue.title }} ${{ github.event.issue.body }}"
+          else
+            TASK_TEXT="${{ github.event.comment.body }} ${{ github.event.review.body }}"
+          fi
 
-          # Select at most 5 source files
-          find . -type f \( \
-            -name "*.rs" -o \
-            -name "*.go" -o \
-            -name "*.kt" -o \
-            -name "*.kts" \
-          \) -not -path "./.git/*" \
-            -not -path "./target/*" \
-            -not -path "./build/*" \
-            -not -path "./node_modules/*" \
-            | head -n 5 | while read file; do
+          echo "Extracting keywords..."
 
-              echo "FILE: $file" >> context/files.txt
-              echo "------------------------" >> context/files.txt
+          # Extract lowercase keywords longer than 3 chars
+          KEYWORDS=$(echo "$TASK_TEXT" | tr '[:upper:]' '[:lower:]' | \
+            grep -oE '\b[a-z]{4,}\b' | sort | uniq | head -n 10)
 
-              # Limit each file to first 200 lines
-              head -n 200 "$file" >> context/files.txt
+          echo "Keywords:"
+          echo "$KEYWORDS"
 
-              echo -e "\n\n" >> context/files.txt
+          MATCHED_FILES=""
+
+          # Try to find files matching keywords
+          for word in $KEYWORDS; do
+            FILES=$(find . -type f \( \
+              -name "*.rs" -o \
+              -name "*.go" -o \
+              -name "*.kt" -o \
+              -name "*.kts" \
+            \) -not -path "./.git/*" | grep -i "$word" || true)
+
+            MATCHED_FILES="$MATCHED_FILES $FILES"
           done
 
-          echo "Truncating context to safe size..."
+          # Remove duplicates
+          MATCHED_FILES=$(echo $MATCHED_FILES | tr ' ' '\n' | sort | uniq)
 
-          # Hard cap total context to 12000 characters (~1500 tokens)
-          truncate -s 12000 context/files.txt
+          # Fallback if nothing matched
+          if [[ -z "$MATCHED_FILES" ]]; then
+            echo "No keyword match. Falling back to main files."
+            MATCHED_FILES=$(find . -type f \( \
+              -name "*.rs" -o \
+              -name "*.go" -o \
+              -name "*.kt" -o \
+              -name "*.kts" \
+            \) -not -path "./.git/*" | head -n 3)
+          fi
+
+          echo "Selected files:"
+          echo "$MATCHED_FILES"
+
+          COUNT=0
+
+          for file in $MATCHED_FILES; do
+            if [[ $COUNT -ge 3 ]]; then
+              break
+            fi
+
+            echo "FILE: $file" >> context/files.txt
+            echo "------------------------" >> context/files.txt
+
+            head -n 150 "$file" >> context/files.txt
+            echo -e "\n\n" >> context/files.txt
+
+            COUNT=$((COUNT+1))
+          done
 
           echo "Final context size:"
           wc -c context/files.txt
