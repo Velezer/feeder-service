@@ -103,7 +103,9 @@ async fn main() {
     if enable_kline_quant {
         streams.extend(build_kline_streams(&symbols, "15m"));
     } else {
-        println!("[INFO] Kline quant analysis is inactive (set ENABLE_KLINE_QUANT=true to enable).");
+        println!(
+            "[INFO] Kline quant analysis is inactive (set ENABLE_KLINE_QUANT=true to enable)."
+        );
     }
 
     let url = format!(
@@ -341,7 +343,6 @@ fn process_depth_update(
         }
     }
 }
-
 
 fn process_kline_event(
     event: &feeder_service::binance_kline::KlineEvent,
