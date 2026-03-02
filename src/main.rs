@@ -25,6 +25,10 @@ async fn main() {
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false); // default enabled
 
+    let enable_kline_quant = std::env::var("ENABLE_KLINE_QUANT")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false); // inactive by default in production
+
     // Maps and state
     let mut config_map: HashMap<String, _> = HashMap::new();
     let mut last_prices: HashMap<String, f64> = HashMap::new();
@@ -92,9 +96,14 @@ async fn main() {
     let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
     if enable_depth {
         streams.extend(build_diff_depth_streams(&symbols, 100));
+    } else {
+        println!("[INFO] Depth streams are disabled by feature flag.");
+    }
+
+    if enable_kline_quant {
         streams.extend(build_kline_streams(&symbols, "15m"));
     } else {
-        println!("[INFO] Depth/kline streams are disabled by feature flag.");
+        println!("[INFO] Kline quant analysis is inactive (set ENABLE_KLINE_QUANT=true to enable).");
     }
 
     let url = format!(
@@ -141,9 +150,11 @@ async fn main() {
             }
 
             // 3) kline updates (15m quant vector signal on closed candles)
-            if let Some(kline_event) = parse_kline_event(payload) {
-                process_kline_event(&kline_event, &config_map, &tx);
-                continue;
+            if enable_kline_quant {
+                if let Some(kline_event) = parse_kline_event(payload) {
+                    process_kline_event(&kline_event, &config_map, &tx);
+                    continue;
+                }
             }
 
             // Unknown / unhandled stream messages (optional logging controlled by env)

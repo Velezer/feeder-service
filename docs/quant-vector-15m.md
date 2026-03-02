@@ -2,6 +2,18 @@
 
 Quant vector analysis is now generated from **closed Binance 15m kline candles**.
 
+## Runtime activation
+
+- Quant kline analysis is **separate from depth analysis**.
+- Production default is inactive: `ENABLE_KLINE_QUANT=false`.
+- To enable quant kline stream subscription and emission, set:
+
+```bash
+ENABLE_KLINE_QUANT=true
+```
+
+Depth processing and depth alerts continue to work independently under their own flags/settings.
+
 ## Data source
 
 - Stream: `<symbol>@kline_15m`
