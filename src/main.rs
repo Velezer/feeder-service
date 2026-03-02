@@ -1,5 +1,6 @@
 use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
+use feeder_service::binance_kline::*;
 use feeder_service::config::Config;
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
@@ -23,6 +24,10 @@ async fn main() {
     let enable_depth = std::env::var("ENABLE_DEPTH")
         .map(|v| v == "true" || v == "1")
         .unwrap_or(false); // default enabled
+
+    let enable_kline_quant = std::env::var("ENABLE_KLINE_QUANT")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false); // inactive by default in production
 
     // Maps and state
     let mut config_map: HashMap<String, _> = HashMap::new();
@@ -95,6 +100,12 @@ async fn main() {
         println!("[INFO] Depth streams are disabled by feature flag.");
     }
 
+    if enable_kline_quant {
+        streams.extend(build_kline_streams(&symbols, "15m"));
+    } else {
+        println!("[INFO] Kline quant analysis is inactive (set ENABLE_KLINE_QUANT=true to enable).");
+    }
+
     let url = format!(
         "wss://data-stream.binance.vision/stream?streams={}",
         streams.join("/")
@@ -134,6 +145,14 @@ async fn main() {
                         &mut big_move_detectors,
                         &tx,
                     );
+                    continue;
+                }
+            }
+
+            // 3) kline updates (15m quant vector signal on closed candles)
+            if enable_kline_quant {
+                if let Some(kline_event) = parse_kline_event(payload) {
+                    process_kline_event(&kline_event, &config_map, &tx);
                     continue;
                 }
             }
@@ -320,5 +339,47 @@ fn process_depth_update(
             }
             BigMoveSignal::None => {}
         }
+    }
+}
+
+
+fn process_kline_event(
+    event: &feeder_service::binance_kline::KlineEvent,
+    config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
+    tx: &broadcast::Sender<String>,
+) {
+    let symbol = event.symbol.to_lowercase();
+    if !config_map.contains_key(&symbol) {
+        return;
+    }
+
+    if let Some(signal) = build_quant_signal_from_kline(event) {
+        let direction = if signal.return_pct > 0.0 {
+            "BULLISH"
+        } else if signal.return_pct < 0.0 {
+            "BEARISH"
+        } else {
+            "FLAT"
+        };
+
+        let msg = format!(
+            "[QUANT15M] {} {} | window={}..{} | O:{:.2} C:{:.2} H:{:.2} L:{:.2} ret={:+.2}% range={:.2}% taker_buy={:.1}% qvol={:.0} trades={}",
+            signal.symbol.to_uppercase(),
+            direction,
+            signal.interval_start_ms,
+            signal.interval_end_ms,
+            signal.open,
+            signal.close,
+            signal.high,
+            signal.low,
+            signal.return_pct,
+            signal.range_pct,
+            signal.taker_buy_ratio_pct,
+            signal.quote_volume,
+            signal.trade_count
+        );
+
+        println!("{}", msg);
+        let _ = tx.send(msg);
     }
 }
