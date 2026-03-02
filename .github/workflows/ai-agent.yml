@@ -55,21 +55,9 @@ jobs:
           git fetch origin
           git checkout "${{ github.event.pull_request.head.ref }}"
 
-      - name: Start context-service compressor
+      - name: Checkout context-service (CLI)
         run: |
           git clone --depth 1 https://github.com/Velezer/context-service context-service
-          nohup cargo run --manifest-path context-service/Cargo.toml > context-service.log 2>&1 &
-
-          for _ in {1..30}; do
-            if curl -fsS "http://127.0.0.1:8080/context" >/dev/null 2>&1; then
-              exit 0
-            fi
-            sleep 1
-          done
-
-          echo "context-service failed to start"
-          cat context-service.log || true
-          exit 1
 
       - name: Build compressed repository context
         run: |
@@ -124,15 +112,35 @@ jobs:
               '{path: $p, content: $c}'
           done <<< "$SORTED" | jq -s '.' > context/selected_files.json
 
+          SCORES_JSON=$(sort -nr context/file_scores.txt | head -n 15 | \
+            awk '{printf "{\"file\":\"%s\",\"score\":%s}\n", $2, $1}' | jq -s '.')
+
           jq -n \
-            --arg context "$TASK_TEXT" \
+            --arg timeframe "15m" \
+            --arg task "$TASK_TEXT" \
+            --argjson vectors "${SCORES_JSON:-[]}" \
+            '{
+              analysis: "quant_vector",
+              timeframe: $timeframe,
+              task: $task,
+              vectors: $vectors
+            }' > context/quant_vector_15m.json
+
+          jq -n \
+            --arg task "$TASK_TEXT" \
+            --arg quant "$(cat context/quant_vector_15m.json)" \
             --argjson files "$(cat context/selected_files.json)" \
             --argjson max_tokens 1800 \
-            '{context: $context, files: $files, max_tokens: $max_tokens}' > context/compress_request.json
+            '{
+              context: ($task + "\n\nQuant Vector Analysis (15m):\n" + $quant),
+              files: $files,
+              max_tokens: $max_tokens
+            }' > context/compress_request.json
 
-          curl -fsS "http://127.0.0.1:8080/context/compress" \
-            -H 'Content-Type: application/json' \
-            -d @context/compress_request.json > context/compress_response.json
+          cargo run --quiet --manifest-path context-service/Cargo.toml -- \
+            compress \
+            --input context/compress_request.json \
+            --output context/compress_response.json
 
           jq -r '.compressed_context' context/compress_response.json > context/files.txt
           truncate -s 7000 context/files.txt
