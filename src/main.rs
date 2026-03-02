@@ -1,5 +1,6 @@
 use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
+use feeder_service::binance_kline::*;
 use feeder_service::config::Config;
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
@@ -91,8 +92,9 @@ async fn main() {
     let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
     if enable_depth {
         streams.extend(build_diff_depth_streams(&symbols, 100));
+        streams.extend(build_kline_streams(&symbols, "15m"));
     } else {
-        println!("[INFO] Depth streams are disabled by feature flag.");
+        println!("[INFO] Depth/kline streams are disabled by feature flag.");
     }
 
     let url = format!(
@@ -136,6 +138,12 @@ async fn main() {
                     );
                     continue;
                 }
+            }
+
+            // 3) kline updates (15m quant vector signal on closed candles)
+            if let Some(kline_event) = parse_kline_event(payload) {
+                process_kline_event(&kline_event, &config_map, &tx);
+                continue;
             }
 
             // Unknown / unhandled stream messages (optional logging controlled by env)
@@ -320,5 +328,47 @@ fn process_depth_update(
             }
             BigMoveSignal::None => {}
         }
+    }
+}
+
+
+fn process_kline_event(
+    event: &feeder_service::binance_kline::KlineEvent,
+    config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
+    tx: &broadcast::Sender<String>,
+) {
+    let symbol = event.symbol.to_lowercase();
+    if !config_map.contains_key(&symbol) {
+        return;
+    }
+
+    if let Some(signal) = build_quant_signal_from_kline(event) {
+        let direction = if signal.return_pct > 0.0 {
+            "BULLISH"
+        } else if signal.return_pct < 0.0 {
+            "BEARISH"
+        } else {
+            "FLAT"
+        };
+
+        let msg = format!(
+            "[QUANT15M] {} {} | window={}..{} | O:{:.2} C:{:.2} H:{:.2} L:{:.2} ret={:+.2}% range={:.2}% taker_buy={:.1}% qvol={:.0} trades={}",
+            signal.symbol.to_uppercase(),
+            direction,
+            signal.interval_start_ms,
+            signal.interval_end_ms,
+            signal.open,
+            signal.close,
+            signal.high,
+            signal.low,
+            signal.return_pct,
+            signal.range_pct,
+            signal.taker_buy_ratio_pct,
+            signal.quote_volume,
+            signal.trade_count
+        );
+
+        println!("{}", msg);
+        let _ = tx.send(msg);
     }
 }

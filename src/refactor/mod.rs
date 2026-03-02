@@ -7,11 +7,11 @@ use crate::{
         DepthUpdate, collect_big_levels, format_notional_compact, format_pressure_visual,
         is_big_depth_update, passes_pressure_filter,
     },
+    binance_kline::{KlineEvent, build_quant_signal_from_kline},
     config::{Config, SymbolConfig},
 };
 
 use self::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
-
 pub mod big_move_detector;
 
 /// Shared application state
@@ -199,6 +199,41 @@ impl AppState {
             top_bid,
             top_ask
         )
+    }
+    pub fn process_kline_event(&self, event: &KlineEvent, tx: &broadcast::Sender<String>) {
+        let symbol = event.symbol.to_lowercase();
+        if !self.config_map.contains_key(&symbol) {
+            return;
+        }
+
+        if let Some(signal) = build_quant_signal_from_kline(event) {
+            let direction = if signal.return_pct > 0.0 {
+                "BULLISH"
+            } else if signal.return_pct < 0.0 {
+                "BEARISH"
+            } else {
+                "FLAT"
+            };
+
+            let msg = format!(
+                "[QUANT15M] {} {} | window={}..{} | O:{:.2} C:{:.2} H:{:.2} L:{:.2} ret={:+.2}% range={:.2}% taker_buy={:.1}% qvol={:.0} trades={}",
+                signal.symbol.to_uppercase(),
+                direction,
+                signal.interval_start_ms,
+                signal.interval_end_ms,
+                signal.open,
+                signal.close,
+                signal.high,
+                signal.low,
+                signal.return_pct,
+                signal.range_pct,
+                signal.taker_buy_ratio_pct,
+                signal.quote_volume,
+                signal.trade_count
+            );
+            println!("{}", msg);
+            let _ = tx.send(msg);
+        }
     }
 
     fn detect_big_move(

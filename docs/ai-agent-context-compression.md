@@ -16,18 +16,20 @@ The previous workflow assembled raw file excerpts and then asked an LLM to summa
 
 ## Local usage
 
-### 1) Run the end-to-end compression test
+### 1) Run the AI-workflow-only compression validation script
 
 ```bash
-cargo test --test context_service_compression_e2e -- --nocapture
+bash tests/e2e_context_service_compression.sh
 ```
 
-This test:
+This script:
 
 - clones `Velezer/context-service`
 - runs it locally on `127.0.0.1:8080`
 - submits real repository files to `/context/compress`
 - validates non-empty compressed output and numeric token estimate
+
+> This validation is intended for the AI agent workflow and is not part of the default Rust test suite.
 
 ### 2) Manual compression check
 
