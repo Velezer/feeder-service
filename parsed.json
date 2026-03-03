@@ -1,0 +1,5 @@
+```json
+{
+  "MODIFIED_FILES": {"path": "server/src/components/Products.jsx"},
+  "PR_TITLE": "Refactored Products Component",
+ <｜begin▁of▁sentence｜>"PR_BODY": "The PR will focus on refining the existing Products component by making it more efficient and reducing redundancy."

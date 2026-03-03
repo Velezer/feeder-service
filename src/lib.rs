@@ -1,5 +1,6 @@
 pub mod binance;
 pub mod binance_depth;
+pub mod binance_kline;
 pub mod config;
 pub mod json_helpers;
 pub mod refactor;
