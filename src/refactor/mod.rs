@@ -216,7 +216,7 @@ impl AppState {
             };
 
             let msg = format!(
-                "[QUANT15M] {} {} | window={}..{} | O:{:.2} C:{:.2} H:{:.2} L:{:.2} ret={:+.2}% range={:.2}% taker_buy={:.1}% qvol={:.0} trades={}",
+                "[QUANT4H] {} {} | window={}..{} | O:{:.2} C:{:.2} H:{:.2} L:{:.2} ret={:+.2}% range={:.2}% taker_buy={:.1}% qvol={:.0} trades={}",
                 signal.symbol.to_uppercase(),
                 direction,
                 signal.interval_start_ms,

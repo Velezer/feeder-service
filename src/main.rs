@@ -101,7 +101,7 @@ async fn main() {
     }
 
     if enable_kline_quant {
-        streams.extend(build_kline_streams(&symbols, "15m"));
+        streams.extend(build_kline_streams(&symbols, "4h"));
     } else {
         println!(
             "[INFO] Kline quant analysis is inactive (set ENABLE_KLINE_QUANT=true to enable)."
@@ -151,7 +151,7 @@ async fn main() {
                 }
             }
 
-            // 3) kline updates (15m quant vector signal on closed candles)
+            // 3) kline updates (4h quant vector signal on closed candles)
             if enable_kline_quant {
                 if let Some(kline_event) = parse_kline_event(payload) {
                     process_kline_event(&kline_event, &config_map, &tx);
@@ -364,7 +364,7 @@ fn process_kline_event(
         };
 
         let msg = format!(
-            "[QUANT15M] {} {} | window={}..{} | O:{:.2} C:{:.2} H:{:.2} L:{:.2} ret={:+.2}% range={:.2}% taker_buy={:.1}% qvol={:.0} trades={}",
+            "[QUANT4H] {} {} | window={}..{} | O:{:.2} C:{:.2} H:{:.2} L:{:.2} ret={:+.2}% range={:.2}% taker_buy={:.1}% qvol={:.0} trades={}",
             signal.symbol.to_uppercase(),
             direction,
             signal.interval_start_ms,

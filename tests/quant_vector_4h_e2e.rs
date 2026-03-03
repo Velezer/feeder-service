@@ -18,7 +18,7 @@ fn depth(symbol: &str, event_time: u64, bid_qty: &str, ask_qty: &str) -> DepthUp
 }
 
 #[tokio::test]
-async fn quant_vector_uses_closed_15m_kline_and_stays_separate_from_depth() {
+async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
     let config = Config {
         symbols: vec![SymbolConfig {
             symbol: "btcusdt".to_string(),
@@ -36,20 +36,20 @@ async fn quant_vector_uses_closed_15m_kline_and_stays_separate_from_depth() {
     let mut app = AppState::new(config);
     let (tx, mut rx) = broadcast::channel(64);
 
-    // Depth activity should not produce QUANT15M messages.
+    // Depth activity should not produce QUANT4H messages.
     app.process_depth_update(&depth("BTCUSDT", 1710000000000, "8.0", "6.0"), &tx);
 
-    // Closed 15m kline should produce QUANT15M message.
+    // Closed 4h kline should produce QUANT4H message.
     let payload = r#"{
-        "stream": "btcusdt@kline_15m",
+        "stream": "btcusdt@kline_4h",
         "data": {
             "e": "kline",
             "E": 1710000900000,
             "s": "BTCUSDT",
             "k": {
                 "t": 1710000000000,
-                "T": 1710000899999,
-                "i": "15m",
+                "T": 1710014399999,
+                "i": "4h",
                 "o": "100.0",
                 "c": "102.5",
                 "h": "103.0",
@@ -69,14 +69,14 @@ async fn quant_vector_uses_closed_15m_kline_and_stays_separate_from_depth() {
 
     let mut seen_quant = false;
     while let Ok(msg) = rx.try_recv() {
-        if msg.contains("[QUANT15M]") {
+        if msg.contains("[QUANT4H]") {
             seen_quant = true;
             assert!(msg.contains("BTCUSDT"));
-            assert!(msg.contains("window=1710000000000..1710000899999"));
+            assert!(msg.contains("window=1710000000000..1710014399999"));
             assert!(msg.contains("ret=+2.50%"));
             assert!(msg.contains("taker_buy=56.9%"));
         }
     }
 
-    assert!(seen_quant, "expected quant signal from closed 15m kline");
+    assert!(seen_quant, "expected quant signal from closed 4h kline");
 }
