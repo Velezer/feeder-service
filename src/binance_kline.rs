@@ -69,7 +69,7 @@ pub fn parse_kline_event(msg: &str) -> Option<KlineEvent> {
 }
 
 pub fn build_quant_signal_from_kline(event: &KlineEvent) -> Option<QuantKlineSignal> {
-    if event.kline.interval != "15m" || !event.kline.is_closed {
+    if event.kline.interval != "4h" || !event.kline.is_closed {
         return None;
     }
 

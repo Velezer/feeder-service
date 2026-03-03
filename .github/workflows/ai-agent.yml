@@ -116,7 +116,7 @@ jobs:
             awk '{printf "{\"file\":\"%s\",\"score\":%s}\n", $2, $1}' | jq -s '.')
 
           jq -n \
-            --arg timeframe "15m" \
+            --arg timeframe "4h" \
             --arg task "$TASK_TEXT" \
             --argjson vectors "${SCORES_JSON:-[]}" \
             '{
@@ -124,15 +124,15 @@ jobs:
               timeframe: $timeframe,
               task: $task,
               vectors: $vectors
-            }' > context/quant_vector_15m.json
+            }' > context/quant_vector_4h.json
 
           jq -n \
             --arg task "$TASK_TEXT" \
-            --arg quant "$(cat context/quant_vector_15m.json)" \
+            --arg quant "$(cat context/quant_vector_4h.json)" \
             --argjson files "$(cat context/selected_files.json)" \
             --argjson max_tokens 1800 \
             '{
-              context: ($task + "\n\nQuant Vector Analysis (15m):\n" + $quant),
+              context: ($task + "\n\nQuant Vector Analysis (4h):\n" + $quant),
               files: $files,
               max_tokens: $max_tokens
             }' > context/compress_request.json

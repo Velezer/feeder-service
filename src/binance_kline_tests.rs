@@ -3,7 +3,7 @@ use crate::binance_kline::{build_kline_streams, build_quant_signal_from_kline, p
 #[test]
 fn parses_combined_kline_payload() {
     let payload = r#"{
-        "stream":"btcusdt@kline_15m",
+        "stream":"btcusdt@kline_4h",
         "data":{
             "e":"kline",
             "E":1710000000000,
@@ -11,7 +11,7 @@ fn parses_combined_kline_payload() {
             "k":{
                 "t":1710000000000,
                 "T":1710000899999,
-                "i":"15m",
+                "i":"4h",
                 "o":"100.0",
                 "c":"101.0",
                 "h":"102.0",
@@ -36,6 +36,6 @@ fn parses_combined_kline_payload() {
 
 #[test]
 fn kline_stream_names_are_lowercased() {
-    let streams = build_kline_streams(&["BTCUSDT".into(), "EthUsdt".into()], "15m");
-    assert_eq!(streams, vec!["btcusdt@kline_15m", "ethusdt@kline_15m"]);
+    let streams = build_kline_streams(&["BTCUSDT".into(), "EthUsdt".into()], "4h");
+    assert_eq!(streams, vec!["btcusdt@kline_4h", "ethusdt@kline_4h"]);
 }
