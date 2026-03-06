@@ -26,7 +26,9 @@ impl DisconnectReason {
             Self::ClientClosed(_) => "client sent close frame without reason".to_string(),
             Self::HeartbeatSendFailed => "failed to send heartbeat ping".to_string(),
             Self::BroadcastReceiveClosed => "broadcast channel closed".to_string(),
-            Self::BroadcastForwardFailed => "failed to forward broadcast message to client".to_string(),
+            Self::BroadcastForwardFailed => {
+                "failed to forward broadcast message to client".to_string()
+            }
             Self::ReceiveError(err) => format!("error reading from websocket client: {err}"),
             Self::ClientStreamEnded => "websocket stream ended".to_string(),
         }

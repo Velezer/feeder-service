@@ -32,7 +32,8 @@ async fn reports_client_close_reason_on_disconnect() {
 
     tokio::task::spawn(warp::serve(ws_route).run(([127, 0, 0, 1], addr.port())));
 
-    let ws_url = Url::parse(&format!("ws://127.0.0.1:{}/aggTrade", addr.port())).expect("build ws url");
+    let ws_url =
+        Url::parse(&format!("ws://127.0.0.1:{}/aggTrade", addr.port())).expect("build ws url");
 
     let mut connected = None;
     for _ in 0..20 {
@@ -48,10 +49,12 @@ async fn reports_client_close_reason_on_disconnect() {
     let (mut client, _) = connected.expect("connect websocket");
 
     client
-        .send(tokio_tungstenite::tungstenite::Message::Close(Some(CloseFrame {
-            code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
-            reason: "browser tab closed".into(),
-        })))
+        .send(tokio_tungstenite::tungstenite::Message::Close(Some(
+            CloseFrame {
+                code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+                reason: "browser tab closed".into(),
+            },
+        )))
         .await
         .expect("send close frame");
 
