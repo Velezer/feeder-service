@@ -223,6 +223,9 @@ jobs:
             exit 1
           }
 
+      - name: Run tests
+        run: cargo test --all-targets
+
       - name: Apply file updates
         run: |
           if [[ "${{ steps.mode.outputs.mode }}" == "create" ]]; then
