@@ -19,6 +19,7 @@ pub struct Config {
     /// When `true`, depth streams are not subscribed and depth messages are not processed.
     pub disable_depth_stream: bool,
     pub news: NewsConfig,
+    pub telegram: TelegramConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -29,6 +30,16 @@ pub struct NewsConfig {
     pub retention_hours: i64,
     pub finnhub_api_key: Option<String>,
     pub newsapi_api_key: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TelegramConfig {
+    pub enabled: bool,
+    pub bot_token: Option<String>,
+    pub chat_id: Option<String>,
+    pub min_correlation_score: f64,
+    pub rate_limit_interval_secs: u64,
+    pub api_base_url: String,
 }
 
 impl Config {
@@ -117,6 +128,27 @@ impl Config {
             newsapi_api_key: env::var("NEWSAPI_API_KEY").ok(),
         };
 
+        let telegram = TelegramConfig {
+            enabled: env::var("ENABLE_TELEGRAM_NOTIFIER")
+                .map(|v| {
+                    let value = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                    matches!(value.as_str(), "1" | "true" | "yes")
+                })
+                .unwrap_or(false),
+            bot_token: env::var("TELEGRAM_BOT_TOKEN").ok(),
+            chat_id: env::var("TELEGRAM_CHAT_ID").ok(),
+            min_correlation_score: env::var("TELEGRAM_MIN_CORRELATION_SCORE")
+                .ok()
+                .and_then(|v| v.parse::<f64>().ok())
+                .unwrap_or(0.0),
+            rate_limit_interval_secs: env::var("TELEGRAM_RATE_LIMIT_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(30),
+            api_base_url: env::var("TELEGRAM_API_BASE_URL")
+                .unwrap_or_else(|_| "https://api.telegram.org".to_string()),
+        };
+
         Config {
             symbols,
             port,
@@ -126,6 +158,7 @@ impl Config {
             big_depth_min_pressure_pct,
             disable_depth_stream,
             news,
+            telegram,
         }
     }
 

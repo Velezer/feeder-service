@@ -1,5 +1,5 @@
 use feeder_service::binance::AggTrade;
-use feeder_service::config::{Config, NewsConfig, SymbolConfig};
+use feeder_service::config::{Config, NewsConfig, SymbolConfig, TelegramConfig};
 use feeder_service::news::store::NewsStore;
 use feeder_service::news::types::NewsItem;
 use feeder_service::refactor::AppState;
@@ -54,6 +54,14 @@ async fn emits_enriched_json_with_news_matches_for_agg_trade() {
             retention_hours: 24,
             finnhub_api_key: None,
             newsapi_api_key: None,
+        },
+        telegram: TelegramConfig {
+            enabled: false,
+            bot_token: None,
+            chat_id: None,
+            min_correlation_score: 0.0,
+            rate_limit_interval_secs: 0,
+            api_base_url: "https://api.telegram.org".to_string(),
         },
     };
 
