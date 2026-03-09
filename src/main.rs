@@ -9,6 +9,7 @@ use feeder_service::news::correlation::CorrelationService;
 use feeder_service::news::providers::fetch_all_news;
 use feeder_service::news::store::NewsStore;
 use feeder_service::news::tagging::tag_symbols;
+use feeder_service::notifiers::telegram::TelegramNotifier;
 use feeder_service::notify::{
     NotificationFanout, build_signal_notification, telegram::TelegramNotifier,
 };
@@ -86,6 +87,12 @@ async fn main() {
             None
         }
     };
+
+    let telegram_notifier = TelegramNotifier::new(config.telegram.clone());
+    let telegram_rx = tx.subscribe();
+    tokio::spawn(async move {
+        telegram_notifier.run(telegram_rx).await;
+    });
 
     // Spawn Warp server for websocket clients
     let ws_route = warp::path("aggTrade").and(warp::ws()).map({
