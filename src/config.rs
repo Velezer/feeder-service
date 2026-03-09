@@ -21,7 +21,7 @@ pub struct Config {
     pub telegram: TelegramConfig,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: Option<String>,

@@ -2,6 +2,7 @@ use crate::config::TelegramConfig;
 use reqwest::Client;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::fmt;
 use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
@@ -20,6 +21,19 @@ struct SendMessagePayload<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     message_thread_id: Option<i64>,
 }
+
+#[derive(Debug)]
+struct TelegramDeliveryError {
+    details: String,
+}
+
+impl fmt::Display for TelegramDeliveryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.details)
+    }
+}
+
+impl std::error::Error for TelegramDeliveryError {}
 
 impl TelegramNotifier {
     pub fn new(config: TelegramConfig) -> Self {
@@ -43,7 +57,8 @@ impl TelegramNotifier {
         loop {
             match rx.recv().await {
                 Ok(msg) => {
-                    if let Some(event) = ParsedEvent::from_broadcast(&msg, self.config.include_bigmove)
+                    if let Some(event) =
+                        ParsedEvent::from_broadcast(&msg, self.config.include_bigmove)
                     {
                         if self.should_debounce(&event.dedupe_key) {
                             continue;
@@ -59,7 +74,10 @@ impl TelegramNotifier {
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                    eprintln!("[telegram] lagged on broadcast channel; skipped {} messages", skipped);
+                    eprintln!(
+                        "[telegram] lagged on broadcast channel; skipped {} messages",
+                        skipped
+                    );
                 }
                 Err(broadcast::error::RecvError::Closed) => {
                     eprintln!("[telegram] broadcast channel closed; notifier exiting");
@@ -73,6 +91,9 @@ impl TelegramNotifier {
         let now = Instant::now();
         let debounce_window = Duration::from_secs(self.config.debounce_window_secs.max(1));
 
+        self.dedupe_state
+            .retain(|_, ts| now.duration_since(*ts) <= debounce_window);
+
         if let Some(last) = self.dedupe_state.get(key)
             && now.duration_since(*last) < debounce_window
         {
@@ -83,7 +104,7 @@ impl TelegramNotifier {
         false
     }
 
-    async fn send_with_retry(&self, text: &str) -> Result<(), reqwest::Error> {
+    async fn send_with_retry(&self, text: &str) -> Result<(), TelegramDeliveryError> {
         let token = self.config.bot_token.as_deref().unwrap_or_default();
         let chat_id = self.config.chat_id.as_deref().unwrap_or_default();
 
@@ -97,25 +118,24 @@ impl TelegramNotifier {
 
         let mut wait = Duration::from_millis(300);
         let max_attempts = 4;
+        let mut last_error = String::from("unknown error");
 
         for attempt in 1..=max_attempts {
             match self.client.post(&endpoint).json(&payload).send().await {
                 Ok(resp) => {
-                    if resp.status().is_success() {
+                    let status = resp.status();
+                    if status.is_success() {
                         return Ok(());
                     }
 
+                    last_error = format!("telegram api status {}", status);
                     eprintln!(
                         "[telegram] sendMessage non-success status={} attempt={}/{}",
-                        resp.status(),
-                        attempt,
-                        max_attempts
+                        status, attempt, max_attempts
                     );
                 }
                 Err(err) => {
-                    if attempt == max_attempts {
-                        return Err(err);
-                    }
+                    last_error = err.to_string();
                     eprintln!(
                         "[telegram] transport error attempt={}/{}: {}",
                         attempt, max_attempts, err
@@ -123,11 +143,18 @@ impl TelegramNotifier {
                 }
             }
 
-            tokio::time::sleep(wait).await;
-            wait = (wait * 2).min(Duration::from_secs(4));
+            if attempt < max_attempts {
+                tokio::time::sleep(wait).await;
+                wait = (wait * 2).min(Duration::from_secs(4));
+            }
         }
 
-        Ok(())
+        Err(TelegramDeliveryError {
+            details: format!(
+                "delivery failed after {} attempts: {}",
+                max_attempts, last_error
+            ),
+        })
     }
 }
 
@@ -137,7 +164,7 @@ struct ParsedEvent {
     symbol: String,
     move_pct: Option<f64>,
     confidence: Option<f64>,
-    headline: String,
+    headlines: Vec<String>,
     links: Vec<String>,
     dedupe_key: String,
 }
@@ -155,45 +182,49 @@ impl ParsedEvent {
 
     fn parse_news_corr(msg: &str) -> Option<Self> {
         let body = msg.strip_prefix("[NEWS_CORR]")?.trim();
-        let mut parts = body.split('|').map(str::trim);
+        let segments: Vec<&str> = body
+            .split('|')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect();
 
-        let left = parts.next()?.to_string();
-        let symbol = left
-            .split_whitespace()
-            .next()
-            .unwrap_or("UNKNOWN")
-            .to_uppercase();
-
-        let move_pct = parse_prefixed_percent(body, "move=");
+        let symbol = extract_symbol(body);
+        let move_pct = parse_prefixed_percent(body, "move=")
+            .or_else(|| parse_prefixed_percent(body, "move_pct="));
         let confidence = parse_prefixed_percent(body, "confidence=")
             .or_else(|| parse_prefixed_percent(body, "conf="));
 
-        let mut links = Vec::new();
-        for token in msg.split_whitespace() {
-            if token.starts_with("http://") || token.starts_with("https://") {
-                links.push(token.trim_end_matches(',').to_string());
-            }
+        let mut headlines = segments
+            .iter()
+            .copied()
+            .filter(|segment| {
+                !segment.contains("=")
+                    && !segment.starts_with("http://")
+                    && !segment.starts_with("https://")
+            })
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+
+        if headlines.is_empty() {
+            headlines.push(body.to_string());
         }
+
+        let links = extract_links(msg);
 
         Some(Self {
             alert_type: "NEWS_CORR",
             symbol: symbol.clone(),
             move_pct,
             confidence,
-            headline: left,
+            headlines,
             links,
-            dedupe_key: format!("{}:{}", symbol, "NEWS_CORR"),
+            dedupe_key: format!("{}:NEWS_CORR", symbol),
         })
     }
 
     fn parse_bigmove(msg: &str) -> Option<Self> {
         let body = msg.strip_prefix("[BIGMOVE]")?.trim();
-        let symbol = body
-            .split_whitespace()
-            .next()
-            .unwrap_or("UNKNOWN")
-            .to_uppercase();
-
+        let symbol = extract_symbol(body);
         let confidence = parse_prefixed_percent(body, "avg_pressure=");
 
         Some(Self {
@@ -201,14 +232,39 @@ impl ParsedEvent {
             symbol: symbol.clone(),
             move_pct: None,
             confidence,
-            headline: body.to_string(),
+            headlines: vec![body.to_string()],
             links: vec![format!(
                 "https://www.binance.com/en/trade/{}",
                 symbol.replace("USDT", "_USDT")
             )],
-            dedupe_key: format!("{}:{}", symbol, "BIGMOVE"),
+            dedupe_key: format!("{}:BIGMOVE", symbol),
         })
     }
+}
+
+fn extract_symbol(text: &str) -> String {
+    for token in text.split_whitespace() {
+        if let Some(value) = token.strip_prefix("symbol=") {
+            return value.trim_matches(',').to_uppercase();
+        }
+    }
+
+    text.split_whitespace()
+        .next()
+        .unwrap_or("UNKNOWN")
+        .trim_matches(',')
+        .to_uppercase()
+}
+
+fn extract_links(text: &str) -> Vec<String> {
+    let mut links = Vec::new();
+    for token in text.split_whitespace() {
+        let token = token.trim_end_matches(',').trim_end_matches(';');
+        if token.starts_with("http://") || token.starts_with("https://") {
+            links.push(token.to_string());
+        }
+    }
+    links
 }
 
 fn parse_prefixed_percent(text: &str, prefix: &str) -> Option<f64> {
@@ -224,10 +280,7 @@ fn parse_prefixed_percent(text: &str, prefix: &str) -> Option<f64> {
 }
 
 fn format_telegram_message(event: &ParsedEvent) -> String {
-    let mut lines = vec![
-        format!("🔔 {} {}", event.alert_type, event.symbol),
-        format!("📰 Headline: {}", event.headline),
-    ];
+    let mut lines = vec![format!("🔔 {} {}", event.alert_type, event.symbol)];
 
     if let Some(move_pct) = event.move_pct {
         lines.push(format!("📈 Move: {:+.2}%", move_pct));
@@ -237,8 +290,11 @@ fn format_telegram_message(event: &ParsedEvent) -> String {
         lines.push(format!("🎯 Confidence: {:.1}%", conf));
     }
 
+    lines.push("📰 Headlines:".to_string());
+    lines.extend(event.headlines.iter().map(|h| format!("- {}", h)));
+
     if !event.links.is_empty() {
-        lines.push("🔗 Links:".to_string());
+        lines.push("🔗 Event links:".to_string());
         lines.extend(event.links.iter().map(|l| format!("- {}", l)));
     }
 
@@ -250,13 +306,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_news_corr_message() {
-        let msg = "[NEWS_CORR] BTCUSDT move=2.35% confidence=74.0 | ETF headline https://example.com";
+    fn parses_news_corr_message_with_multiple_headlines() {
+        let msg = "[NEWS_CORR] symbol=BTCUSDT move=2.35% confidence=74.0 | ETF headline one | macro headline two https://example.com";
         let event = ParsedEvent::from_broadcast(msg, true).expect("expected parse");
         assert_eq!(event.alert_type, "NEWS_CORR");
         assert_eq!(event.symbol, "BTCUSDT");
         assert_eq!(event.move_pct, Some(2.35));
         assert_eq!(event.confidence, Some(74.0));
+        assert_eq!(event.headlines.len(), 2);
         assert_eq!(event.links.len(), 1);
     }
 
@@ -265,5 +322,22 @@ mod tests {
         let msg = "[BIGMOVE] BTCUSDT BULLISH BREAKOUT likely! avg_pressure=80.2% notional=12345";
         assert!(ParsedEvent::from_broadcast(msg, false).is_none());
         assert!(ParsedEvent::from_broadcast(msg, true).is_some());
+    }
+
+    #[test]
+    fn debounce_blocks_repeated_symbol_and_alert_type() {
+        let mut notifier = TelegramNotifier::new(TelegramConfig {
+            enabled: true,
+            bot_token: Some("token".to_string()),
+            chat_id: Some("chat".to_string()),
+            thread_id: None,
+            include_bigmove: false,
+            debounce_window_secs: 60,
+        });
+
+        assert!(!notifier.should_debounce("BTCUSDT:NEWS_CORR"));
+        assert!(notifier.should_debounce("BTCUSDT:NEWS_CORR"));
+        assert!(!notifier.should_debounce("ETHUSDT:NEWS_CORR"));
+        assert!(!notifier.should_debounce("BTCUSDT:BIGMOVE"));
     }
 }
