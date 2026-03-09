@@ -3,7 +3,7 @@ use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
 use feeder_service::config::Config;
 use feeder_service::correlation::engine::CorrelationEngine;
-use feeder_service::correlation::model::{MarketEvent, MarketEventKind};
+use feeder_service::correlation::model::{MarketEvent, MarketEventKind, parse_news_event};
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
@@ -172,6 +172,12 @@ async fn main() {
                     process_kline_event(&kline_event, &config_map, &mut correlation_engine, &tx);
                     continue;
                 }
+            }
+
+            // 4) external news events used for correlation
+            if let Some(news_event) = parse_news_event(payload) {
+                correlation_engine.ingest_news(news_event);
+                continue;
             }
 
             // Unknown / unhandled stream messages (optional logging controlled by env)
