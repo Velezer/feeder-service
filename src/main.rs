@@ -673,3 +673,35 @@ async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
         );
     }
 }
+
+fn emit_correlation(
+    signal: Option<feeder_service::correlation::model::CorrelationSignal>,
+    tx: &broadcast::Sender<String>,
+) {
+    let Some(signal) = signal else {
+        return;
+    };
+
+    let kind = match signal.market_event_kind {
+        MarketEventKind::AggTrade => "aggTrade",
+        MarketEventKind::DepthPressure => "depth",
+        MarketEventKind::KlineClose => "kline",
+    };
+
+    let corr_msg = format!(
+        "[NEWS_CORR] {} kind={} conf={:.2} lag={}ms move={:+.3}% notional={:.0} windows=5m:{} 15m:{} 1h:{} headline=\"{}\"",
+        signal.symbol.to_uppercase(),
+        kind,
+        signal.confidence,
+        signal.lag_ms,
+        signal.move_pct,
+        signal.notional,
+        signal.window_5m_count,
+        signal.window_15m_count,
+        signal.window_1h_count,
+        signal.news_headline,
+    );
+
+    println!("{}", corr_msg);
+    let _ = tx.send(corr_msg);
+}

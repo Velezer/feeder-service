@@ -174,6 +174,7 @@ impl Config {
             .ok()
             .map(|raw| {
                 raw.split(',')
+                    .map(|s| s.trim().to_string())
                     .map(|s| s.trim().to_lowercase())
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<String>>()
