@@ -62,7 +62,6 @@ impl AppState {
         }
     }
 
-
     fn build_correlation_service(config: &Config) -> Result<CorrelationService> {
         let store = NewsStore::new(config.news.db_path.clone());
         store.init()?;
@@ -100,7 +99,9 @@ impl AppState {
         event_ts_ms: i64,
         move_metrics: serde_json::Value,
     ) {
-        if let Some(payload) = self.build_enriched_payload(signal_type, symbol, event_ts_ms, move_metrics) {
+        if let Some(payload) =
+            self.build_enriched_payload(signal_type, symbol, event_ts_ms, move_metrics)
+        {
             let _ = tx.send(payload);
         }
     }

@@ -72,7 +72,6 @@ async fn main() {
         }
     };
 
-
     // Spawn Warp server for websocket clients
     let ws_route = warp::path("aggTrade").and(warp::ws()).map({
         let tx = tx.clone();
@@ -159,7 +158,14 @@ async fn main() {
 
             // 1) aggTrade messages
             if let Some(agg) = parse_agg_trade(payload) {
-                process_agg_trade(&agg, &config_map, &mut last_prices, &tx, correlation_service.as_ref()).await;
+                process_agg_trade(
+                    &agg,
+                    &config_map,
+                    &mut last_prices,
+                    &tx,
+                    correlation_service.as_ref(),
+                )
+                .await;
                 continue;
             }
 
@@ -181,7 +187,12 @@ async fn main() {
             // 3) kline updates (4h quant vector signal on closed candles)
             if enable_kline_quant {
                 if let Some(kline_event) = parse_kline_event(payload) {
-                    process_kline_event(&kline_event, &config_map, &tx, correlation_service.as_ref());
+                    process_kline_event(
+                        &kline_event,
+                        &config_map,
+                        &tx,
+                        correlation_service.as_ref(),
+                    );
                     continue;
                 }
             }
@@ -458,7 +469,6 @@ fn process_kline_event(
         );
     }
 }
-
 
 fn build_and_send_enriched_payload(
     tx: &broadcast::Sender<String>,
