@@ -13,6 +13,7 @@ use crate::{
     binance_kline::{KlineEvent, build_quant_signal_from_kline},
     config::{Config, SymbolConfig},
     news::{correlation::CorrelationService, store::NewsStore},
+    notify::{NotificationFanout, build_signal_notification, telegram::TelegramNotifier},
 };
 
 use self::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
@@ -29,6 +30,7 @@ pub struct AppState {
     /// Map of symbol to big move detector
     big_move_detectors: HashMap<String, BigMoveDetector>,
     correlation_service: Option<CorrelationService>,
+    notifier: NotificationFanout,
 }
 
 impl AppState {
@@ -53,12 +55,15 @@ impl AppState {
 
         let correlation_service = Self::build_correlation_service(&config).ok();
 
+        let telegram = TelegramNotifier::new(config.telegram.clone());
+
         Self {
             config,
             config_map,
             last_prices: HashMap::new(),
             big_move_detectors,
             correlation_service,
+            notifier: NotificationFanout::new(Some(telegram)),
         }
     }
 
@@ -74,24 +79,21 @@ impl AppState {
         symbol: &str,
         event_ts_ms: i64,
         move_metrics: serde_json::Value,
-    ) -> Option<String> {
+    ) -> Option<crate::notify::SignalNotification> {
         let service = self.correlation_service.as_ref()?;
         let correlation = service.correlate(symbol, event_ts_ms).ok()?;
 
-        Some(
-            json!({
-                "signal_type": signal_type,
-                "symbol": symbol.to_uppercase(),
-                "event_timestamp": event_ts_ms,
-                "move_metrics": move_metrics,
-                "matched_news": correlation.matches,
-                "correlation_score": correlation.score,
-            })
-            .to_string(),
-        )
+        Some(build_signal_notification(
+            signal_type,
+            symbol,
+            event_ts_ms,
+            move_metrics,
+            &correlation.matches,
+            correlation.score,
+        ))
     }
 
-    fn send_enriched_payload(
+    async fn send_enriched_payload(
         &self,
         tx: &broadcast::Sender<String>,
         signal_type: &str,
@@ -102,7 +104,7 @@ impl AppState {
         if let Some(payload) =
             self.build_enriched_payload(signal_type, symbol, event_ts_ms, move_metrics)
         {
-            let _ = tx.send(payload);
+            self.notifier.dispatch(tx, payload).await;
         }
     }
     pub async fn process_agg_trade(&mut self, agg: &AggTrade, tx: &broadcast::Sender<String>) {
@@ -131,10 +133,10 @@ impl AppState {
                 "spike_pct": spike,
                 "buyer_maker": agg.m,
             }),
-        );
+        ).await;
     }
 
-    pub fn process_depth_update(&mut self, depth: &DepthUpdate, tx: &broadcast::Sender<String>) {
+    pub async fn process_depth_update(&mut self, depth: &DepthUpdate, tx: &broadcast::Sender<String>) {
         let symbol = depth.symbol.to_lowercase();
         let cfg = match self.config_map.get(&symbol) {
             Some(c) => c,
@@ -170,6 +172,8 @@ impl AppState {
         println!("{}", depth_msg);
         let _ = tx.send(depth_msg.clone());
 
+
+
         self.send_enriched_payload(
             tx,
             "depth_update",
@@ -182,7 +186,7 @@ impl AppState {
                 "top_bid_count": big_bids.len(),
                 "top_ask_count": big_asks.len(),
             }),
-        );
+        ).await;
 
         self.detect_big_move(&symbol, bid_pressure_pct, total_notional, depth, tx);
     }
@@ -278,7 +282,7 @@ impl AppState {
             top_ask
         )
     }
-    pub fn process_kline_event(&self, event: &KlineEvent, tx: &broadcast::Sender<String>) {
+    pub async fn process_kline_event(&self, event: &KlineEvent, tx: &broadcast::Sender<String>) {
         let symbol = event.symbol.to_lowercase();
         if !self.config_map.contains_key(&symbol) {
             return;
@@ -324,7 +328,7 @@ impl AppState {
                     "quote_volume": signal.quote_volume,
                     "trade_count": signal.trade_count,
                 }),
-            );
+            ).await;
         }
     }
 

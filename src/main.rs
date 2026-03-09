@@ -6,11 +6,13 @@ use feeder_service::news::correlation::CorrelationService;
 use feeder_service::news::providers::fetch_all_news;
 use feeder_service::news::store::NewsStore;
 use feeder_service::news::tagging::tag_symbols;
+use feeder_service::notify::{NotificationFanout, build_signal_notification, telegram::TelegramNotifier};
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::time::{Duration, interval};
 use tokio_tungstenite::connect_async;
@@ -63,6 +65,9 @@ async fn main() {
     }
 
     let (tx, _rx) = broadcast::channel(config.broadcast_capacity);
+    let notifier = Arc::new(NotificationFanout::new(Some(TelegramNotifier::new(
+        config.telegram.clone(),
+    ))));
     let correlation_service = NewsStore::new(config.news.db_path.clone());
     let correlation_service = match correlation_service.init() {
         Ok(()) => Some(CorrelationService::from_env(correlation_service)),
@@ -164,6 +169,7 @@ async fn main() {
                     &mut last_prices,
                     &tx,
                     correlation_service.as_ref(),
+                    notifier.as_ref(),
                 )
                 .await;
                 continue;
@@ -179,7 +185,9 @@ async fn main() {
                         &mut big_move_detectors,
                         &tx,
                         correlation_service.as_ref(),
-                    );
+                        notifier.as_ref(),
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -192,7 +200,9 @@ async fn main() {
                         &config_map,
                         &tx,
                         correlation_service.as_ref(),
-                    );
+                        notifier.as_ref(),
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -217,6 +227,7 @@ async fn process_agg_trade(
     last_prices: &mut HashMap<String, f64>,
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
 ) {
     let symbol = agg.s.to_lowercase();
     let cfg = match config_map.get(&symbol) {
@@ -236,6 +247,7 @@ async fn process_agg_trade(
     build_and_send_enriched_payload(
         tx,
         correlation_service,
+        notifier,
         "agg_trade",
         &symbol,
         agg.t as i64,
@@ -245,16 +257,18 @@ async fn process_agg_trade(
             "spike_pct": spike,
             "buyer_maker": agg.m,
         }),
-    );
+    )
+    .await;
 }
 
-fn process_depth_update(
+async fn process_depth_update(
     depth: &feeder_service::binance_depth::DepthUpdate,
     config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     config: &Config,
     big_move_detectors: &mut HashMap<String, BigMoveDetector>,
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
 ) {
     let symbol = depth.symbol.to_lowercase();
     let cfg = match config_map.get(&symbol) {
@@ -363,6 +377,7 @@ fn process_depth_update(
     build_and_send_enriched_payload(
         tx,
         correlation_service,
+        notifier,
         "depth_update",
         &symbol,
         depth.event_time as i64,
@@ -373,7 +388,8 @@ fn process_depth_update(
             "top_bid_count": big_bids.len(),
             "top_ask_count": big_asks.len(),
         }),
-    );
+    )
+    .await;
 
     if let Some(detector) = big_move_detectors.get_mut(&symbol) {
         let snap = DepthSnapshot {
@@ -413,11 +429,12 @@ fn process_depth_update(
     }
 }
 
-fn process_kline_event(
+async fn process_kline_event(
     event: &feeder_service::binance_kline::KlineEvent,
     config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
 ) {
     let symbol = event.symbol.to_lowercase();
     if !config_map.contains_key(&symbol) {
@@ -456,6 +473,7 @@ fn process_kline_event(
         build_and_send_enriched_payload(
             tx,
             correlation_service,
+            notifier,
             "kline_quant",
             &symbol,
             event.event_time as i64,
@@ -466,13 +484,15 @@ fn process_kline_event(
                 "quote_volume": signal.quote_volume,
                 "trade_count": signal.trade_count,
             }),
-        );
+        )
+        .await;
     }
 }
 
-fn build_and_send_enriched_payload(
+async fn build_and_send_enriched_payload(
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
     signal_type: &str,
     symbol: &str,
     event_timestamp: i64,
@@ -483,17 +503,16 @@ fn build_and_send_enriched_payload(
     };
 
     if let Ok(correlation) = service.correlate(symbol, event_timestamp) {
-        let payload = json!({
-            "signal_type": signal_type,
-            "symbol": symbol.to_uppercase(),
-            "event_timestamp": event_timestamp,
-            "move_metrics": move_metrics,
-            "matched_news": correlation.matches,
-            "correlation_score": correlation.score,
-        })
-        .to_string();
+        let payload = build_signal_notification(
+            signal_type,
+            symbol,
+            event_timestamp,
+            move_metrics,
+            &correlation.matches,
+            correlation.score,
+        );
 
-        let _ = tx.send(payload);
+        notifier.dispatch(tx, payload).await;
     }
 }
 
