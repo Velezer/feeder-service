@@ -91,7 +91,7 @@ async fn main() {
             // 2) depth updates
             if let Some(depth) = parse_depth_update(payload) {
                 let mut state = app_state.lock().unwrap();
-                state.process_depth_update(&depth, &tx);
+                state.process_depth_update(&depth, &tx).await;
                 continue;
             }
 

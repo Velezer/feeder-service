@@ -1,7 +1,7 @@
 use feeder_service::{
     binance_depth::DepthUpdate,
     binance_kline::parse_kline_event,
-    config::{Config, SymbolConfig},
+    config::{Config, NewsConfig, SymbolConfig, TelegramConfig},
     refactor::AppState,
 };
 use tokio::sync::broadcast;
@@ -31,17 +31,42 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
         big_depth_min_notional: 0.0,
         big_depth_min_pressure_pct: 0.0,
         disable_depth_stream: false,
+        telegram: TelegramConfig {
+            enabled: false,
+            bot_token: None,
+            chat_id: None,
+            thread_id: None,
+            include_bigmove: false,
+            debounce_window_secs: 45,
+        },
         corr_min_move_pct: 0.25,
         corr_max_lag_seconds: 300,
         corr_min_confidence: 0.6,
         news_streams: vec![],
+        news: NewsConfig {
+            enabled: false,
+            db_path: "news.sqlite".to_string(),
+            poll_interval_secs: 300,
+            retention_hours: 168,
+            finnhub_api_key: None,
+            newsapi_api_key: None,
+        },
+        telegram: TelegramConfig {
+            enabled: false,
+            bot_token: None,
+            chat_id: None,
+            min_correlation_score: 0.0,
+            rate_limit_interval_secs: 0,
+            api_base_url: "https://api.telegram.org".to_string(),
+        },
     };
 
     let mut app = AppState::new(config);
     let (tx, mut rx) = broadcast::channel(64);
 
     // Depth activity should not produce QUANT4H messages.
-    app.process_depth_update(&depth("BTCUSDT", 1710000000000, "8.0", "6.0"), &tx);
+    app.process_depth_update(&depth("BTCUSDT", 1710000000000, "8.0", "6.0"), &tx)
+        .await;
 
     // Closed 4h kline should produce QUANT4H message.
     let payload = r#"{
@@ -69,7 +94,7 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
     }"#;
 
     let event = parse_kline_event(payload).expect("expected kline event");
-    app.process_kline_event(&event, &tx);
+    app.process_kline_event(&event, &tx).await;
 
     let mut seen_quant = false;
     while let Ok(msg) = rx.try_recv() {
