@@ -1,7 +1,6 @@
 use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
-use feeder_service::config::Config;
 use feeder_service::correlation::engine::CorrelationEngine;
 use feeder_service::correlation::model::{MarketEvent, MarketEventKind, parse_news_event};
 use feeder_service::config::{Config, NewsConfig};
@@ -9,7 +8,6 @@ use feeder_service::news::correlation::CorrelationService;
 use feeder_service::news::providers::fetch_all_news;
 use feeder_service::news::store::NewsStore;
 use feeder_service::news::tagging::tag_symbols;
-use feeder_service::notifiers::telegram::TelegramNotifier;
 use feeder_service::notify::{
     NotificationFanout, build_signal_notification, telegram::TelegramNotifier,
 };
@@ -87,12 +85,6 @@ async fn main() {
             None
         }
     };
-
-    let telegram_notifier = TelegramNotifier::new(config.telegram.clone());
-    let telegram_rx = tx.subscribe();
-    tokio::spawn(async move {
-        telegram_notifier.run(telegram_rx).await;
-    });
 
     // Spawn Warp server for websocket clients
     let ws_route = warp::path("aggTrade").and(warp::ws()).map({
@@ -219,10 +211,10 @@ async fn main() {
             // 3) kline updates (4h quant vector signal on closed candles)
             if enable_kline_quant {
                 if let Some(kline_event) = parse_kline_event(payload) {
-                    process_kline_event(&kline_event, &config_map, &mut correlation_engine, &tx);
                     process_kline_event(
                         &kline_event,
                         &config_map,
+                        &mut correlation_engine,
                         &tx,
                         correlation_service.as_ref(),
                         notifier.as_ref(),
@@ -608,36 +600,6 @@ async fn build_and_send_enriched_payload(
     }
 }
 
-fn emit_correlation(
-    signal: Option<feeder_service::correlation::model::CorrelationSignal>,
-    tx: &broadcast::Sender<String>,
-) {
-    let Some(signal) = signal else {
-        return;
-    };
-
-    let kind = match signal.market_event_kind {
-        MarketEventKind::AggTrade => "aggTrade",
-        MarketEventKind::DepthPressure => "depth",
-        MarketEventKind::KlineClose => "kline",
-    };
-
-    let corr_msg = format!(
-        "[NEWS_CORR] {} kind={} conf={:.2} lag={}ms move={:+.3}% notional={:.0} windows=5m:{} 15m:{} 1h:{} headline=\"{}\"",
-        signal.symbol.to_uppercase(),
-        kind,
-        signal.confidence,
-        signal.lag_ms,
-        signal.move_pct,
-        signal.notional,
-        signal.window_5m_count,
-        signal.window_15m_count,
-        signal.window_1h_count,
-        signal.news_headline,
-    );
-
-    println!("{}", corr_msg);
-    let _ = tx.send(corr_msg);
 async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
     let store = NewsStore::new(news_config.db_path.clone());
     store.init()?;

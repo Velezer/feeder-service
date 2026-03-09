@@ -10,8 +10,12 @@ The shared formatting path is implemented in `src/notify/mod.rs` so websocket an
 ## Environment variables
 
 - `ENABLE_TELEGRAM_NOTIFIER` (`true|false`, default `false`)
+- `TELEGRAM_ENABLED` (`true|false`, default `false`, alias supported for compatibility)
 - `TELEGRAM_BOT_TOKEN` (required when enabled)
 - `TELEGRAM_CHAT_ID` (required when enabled)
+- `TELEGRAM_THREAD_ID` (optional forum topic thread id for `sendMessage`)
+- `TELEGRAM_INCLUDE_BIGMOVE` (`true|false`, default `false`)
+- `TELEGRAM_DEBOUNCE_WINDOW_SECS` (default `45`, dedupe window for repeated alerts)
 - `TELEGRAM_MIN_CORRELATION_SCORE` (default `0.0`)
 - `TELEGRAM_RATE_LIMIT_INTERVAL_SECS` (default `30`)
 - `TELEGRAM_API_BASE_URL` (default `https://api.telegram.org`)
