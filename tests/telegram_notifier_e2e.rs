@@ -3,7 +3,9 @@ use std::time::Duration;
 
 use feeder_service::config::TelegramConfig;
 use feeder_service::news::correlation::MatchedNews;
-use feeder_service::notify::{NotificationFanout, build_signal_notification, telegram::TelegramNotifier};
+use feeder_service::notify::{
+    NotificationFanout, build_signal_notification, telegram::TelegramNotifier,
+};
 use serde_json::json;
 use tokio::sync::broadcast;
 use warp::Filter;

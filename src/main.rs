@@ -6,7 +6,9 @@ use feeder_service::news::correlation::CorrelationService;
 use feeder_service::news::providers::fetch_all_news;
 use feeder_service::news::store::NewsStore;
 use feeder_service::news::tagging::tag_symbols;
-use feeder_service::notify::{NotificationFanout, build_signal_notification, telegram::TelegramNotifier};
+use feeder_service::notify::{
+    NotificationFanout, build_signal_notification, telegram::TelegramNotifier,
+};
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;

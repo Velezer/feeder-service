@@ -53,7 +53,8 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
     let (tx, mut rx) = broadcast::channel(64);
 
     // Depth activity should not produce QUANT4H messages.
-    app.process_depth_update(&depth("BTCUSDT", 1710000000000, "8.0", "6.0"), &tx).await;
+    app.process_depth_update(&depth("BTCUSDT", 1710000000000, "8.0", "6.0"), &tx)
+        .await;
 
     // Closed 4h kline should produce QUANT4H message.
     let payload = r#"{

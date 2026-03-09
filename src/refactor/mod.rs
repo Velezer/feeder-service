@@ -133,10 +133,15 @@ impl AppState {
                 "spike_pct": spike,
                 "buyer_maker": agg.m,
             }),
-        ).await;
+        )
+        .await;
     }
 
-    pub async fn process_depth_update(&mut self, depth: &DepthUpdate, tx: &broadcast::Sender<String>) {
+    pub async fn process_depth_update(
+        &mut self,
+        depth: &DepthUpdate,
+        tx: &broadcast::Sender<String>,
+    ) {
         let symbol = depth.symbol.to_lowercase();
         let cfg = match self.config_map.get(&symbol) {
             Some(c) => c,
@@ -172,8 +177,6 @@ impl AppState {
         println!("{}", depth_msg);
         let _ = tx.send(depth_msg.clone());
 
-
-
         self.send_enriched_payload(
             tx,
             "depth_update",
@@ -186,7 +189,8 @@ impl AppState {
                 "top_bid_count": big_bids.len(),
                 "top_ask_count": big_asks.len(),
             }),
-        ).await;
+        )
+        .await;
 
         self.detect_big_move(&symbol, bid_pressure_pct, total_notional, depth, tx);
     }
@@ -328,7 +332,8 @@ impl AppState {
                     "quote_volume": signal.quote_volume,
                     "trade_count": signal.trade_count,
                 }),
-            ).await;
+            )
+            .await;
         }
     }
 

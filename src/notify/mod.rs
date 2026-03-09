@@ -22,11 +22,7 @@ impl NotificationFanout {
         Self { telegram }
     }
 
-    pub async fn dispatch(
-        &self,
-        tx: &broadcast::Sender<String>,
-        notification: SignalNotification,
-    ) {
+    pub async fn dispatch(&self, tx: &broadcast::Sender<String>, notification: SignalNotification) {
         let _ = tx.send(notification.ws_payload);
 
         if let Some(telegram) = &self.telegram {
@@ -129,7 +125,10 @@ fn direction_and_magnitude(move_metrics: &serde_json::Value) -> (String, String)
         .and_then(|v| v.as_f64())
     {
         let direction = if pressure > 50.0 { "BUY" } else { "SELL" };
-        return (direction.to_string(), format!("bid pressure {:.1}%", pressure));
+        return (
+            direction.to_string(),
+            format!("bid pressure {:.1}%", pressure),
+        );
     }
 
     ("N/A".to_string(), "move metrics unavailable".to_string())
