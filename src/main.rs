@@ -2,10 +2,10 @@ use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
 use feeder_service::config::{Config, NewsConfig};
-use feeder_service::ws_helpers::*;
 use feeder_service::news::providers::fetch_all_news;
 use feeder_service::news::store::NewsStore;
 use feeder_service::news::tagging::tag_symbols;
+use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use std::collections::HashMap;
@@ -400,7 +400,6 @@ fn process_kline_event(
     }
 }
 
-
 async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
     let store = NewsStore::new(news_config.db_path.clone());
     store.init()?;
@@ -424,7 +423,8 @@ async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
 
         let inserted = store.upsert_many(&fetched)?;
 
-        let retention_cutoff = chrono::Utc::now().timestamp() - (news_config.retention_hours * 3600);
+        let retention_cutoff =
+            chrono::Utc::now().timestamp() - (news_config.retention_hours * 3600);
         let pruned = store.prune_older_than(retention_cutoff)?;
 
         println!(
