@@ -49,6 +49,21 @@ pub struct TelegramConfig {
     pub api_base_url: String,
 }
 
+impl TelegramConfig {
+    /// Returns true when Telegram fanout is enabled and has the required credentials.
+    pub fn is_ready(&self) -> bool {
+        self.enabled
+            && self
+                .bot_token
+                .as_deref()
+                .is_some_and(|v| !v.trim().is_empty())
+            && self
+                .chat_id
+                .as_deref()
+                .is_some_and(|v| !v.trim().is_empty())
+    }
+}
+
 impl Config {
     pub fn load() -> Self {
         let default_qty = env::var("BIG_TRADE_QTY")
@@ -171,7 +186,10 @@ impl Config {
                 .and_then(|v| v.parse::<u64>().ok())
                 .unwrap_or(30),
             api_base_url: env::var("TELEGRAM_API_BASE_URL")
-                .unwrap_or_else(|_| "https://api.telegram.org".to_string()),
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .ok()
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "https://api.telegram.org".to_string()),
         };
 
         Config {
@@ -240,6 +258,45 @@ mod tests {
             std::env::remove_var("DISABLE_DEPTH_STREAM");
             std::env::remove_var("ENABLE_TELEGRAM_NOTIFIER");
             std::env::remove_var("NEWS_STREAMS");
+        }
+    }
+
+    #[test]
+    fn telegram_config_readiness_requires_enabled_and_credentials() {
+        let valid = super::TelegramConfig {
+            enabled: true,
+            bot_token: Some("bot-token".to_string()),
+            chat_id: Some("chat-id".to_string()),
+            ..Default::default()
+        };
+        assert!(valid.is_ready());
+
+        let missing_chat = super::TelegramConfig {
+            chat_id: Some(" ".to_string()),
+            ..valid.clone()
+        };
+        assert!(!missing_chat.is_ready());
+
+        let disabled = super::TelegramConfig {
+            enabled: false,
+            ..valid
+        };
+        assert!(!disabled.is_ready());
+    }
+
+    #[test]
+    fn telegram_api_base_url_is_trimmed() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+
+        unsafe {
+            std::env::set_var("TELEGRAM_API_BASE_URL", " https://api.telegram.org/ ");
+        }
+
+        let config = Config::load();
+        assert_eq!(config.telegram.api_base_url, "https://api.telegram.org");
+
+        unsafe {
+            std::env::remove_var("TELEGRAM_API_BASE_URL");
         }
     }
 }

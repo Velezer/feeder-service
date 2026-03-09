@@ -55,7 +55,10 @@ impl AppState {
 
         let correlation_service = Self::build_correlation_service(&config).ok();
 
-        let telegram = TelegramNotifier::new(config.telegram.clone());
+        let telegram = config
+            .telegram
+            .is_ready()
+            .then(|| TelegramNotifier::new(config.telegram.clone()));
 
         Self {
             config,
@@ -63,7 +66,7 @@ impl AppState {
             last_prices: HashMap::new(),
             big_move_detectors,
             correlation_service,
-            notifier: NotificationFanout::new(Some(telegram)),
+            notifier: NotificationFanout::new(telegram),
         }
     }
 
