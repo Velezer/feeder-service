@@ -1,7 +1,7 @@
 use feeder_service::{
     binance_depth::DepthUpdate,
     binance_kline::parse_kline_event,
-    config::{Config, SymbolConfig, TelegramConfig},
+    config::{Config, NewsConfig, SymbolConfig, TelegramConfig},
     refactor::AppState,
 };
 use tokio::sync::broadcast;
@@ -38,6 +38,14 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
             thread_id: None,
             include_bigmove: false,
             debounce_window_secs: 45,
+        },
+        news: NewsConfig {
+            enabled: false,
+            db_path: "news.sqlite".to_string(),
+            poll_interval_secs: 300,
+            retention_hours: 168,
+            finnhub_api_key: None,
+            newsapi_api_key: None,
         },
     };
 
