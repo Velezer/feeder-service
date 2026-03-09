@@ -28,8 +28,19 @@ The websocket stream now emits **two messages** for qualifying signals:
 
 ## Correlation window
 
-The service queries `news_items` by `published_at` and symbol tag match in a configurable
-window around the signal event timestamp.
+The service queries a normalized symbol table (`news_item_symbols`) joined to `news_items`
+with indexed predicates on symbol and publish timestamp. This avoids scanning and JSON symbol
+parsing for every candidate row in the correlation window.
+
+The schema includes:
+
+- `news_item_symbols(news_item_id, symbol, published_at)`
+- `idx_news_item_symbols_symbol_news_item (symbol, news_item_id)`
+- `idx_news_item_symbols_symbol_published_at (symbol, published_at DESC, news_item_id)`
+
+`NewsStore::init` uses idempotent migration statements (`CREATE TABLE IF NOT EXISTS` and
+`CREATE INDEX IF NOT EXISTS`) and backfills symbol rows from existing `news_items` records,
+so older databases are upgraded safely.
 
 Environment variables:
 
