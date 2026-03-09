@@ -49,3 +49,14 @@ Environment variables:
 - `NEWS_CORRELATION_MAX_MATCHES` (default: `5`)
 
 The score is currently a simple normalized match count (`matches / 5`, clamped to 1.0).
+
+## End-to-end coverage
+
+`tests/news_price_correlation_e2e.rs` validates the real app wiring without provider mocks:
+
+- creates a temporary SQLite database via `NewsStore::init`
+- seeds concrete `NewsItem` rows after symbol extraction through `news::tagging::tag_symbols`
+- feeds a real `AggTrade` into `AppState::process_agg_trade`
+- asserts the enriched JSON output contains expected news matches and deterministic score (`2/5 = 0.4`)
+
+This test is non-destructive and safe to run in CI because it only writes to a temporary local database path.

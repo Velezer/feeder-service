@@ -45,3 +45,19 @@ jobs:
 
       - name: Run tests
         run: cargo test --all-targets
+
+      - name: Run non-destructive e2e tests
+        run: |
+          cargo test --test news_correlation_e2e -- --nocapture
+          cargo test --test news_price_correlation_e2e -- --nocapture
+          cargo test --test news_store_symbol_index_e2e -- --nocapture
+          cargo test --test telegram_notifier_e2e -- --nocapture
+
+      - name: Run Telegram integration e2e (opt-in)
+        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+        env:
+          TELEGRAM_E2E: '1'
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          TELEGRAM_API_BASE_URL: ${{ secrets.TELEGRAM_API_BASE_URL || 'https://api.telegram.org' }}
+        run: cargo test --test telegram_alert_e2e -- --nocapture

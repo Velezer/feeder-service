@@ -42,3 +42,23 @@ News:
 - Telegram publish is best-effort and never aborts stream processing.
 - Telegram delivery retries up to 3 attempts with exponential backoff (`300ms`, `600ms`, `1200ms`).
 - If all attempts fail, the system logs the error and continues processing.
+
+## End-to-end tests and safety gating
+
+Two e2e tests cover notifier behavior:
+
+- `tests/telegram_notifier_e2e.rs`: non-destructive local integration against a loopback HTTP endpoint (safe in CI by default).
+- `tests/telegram_alert_e2e.rs`: real Telegram Bot API integration.
+
+`tests/telegram_alert_e2e.rs` is explicitly gated and will only send messages when `TELEGRAM_E2E=1`.
+If the gate is enabled, these environment variables are required:
+
+- `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_CHAT_ID`
+- `TELEGRAM_API_BASE_URL` (optional, defaults to `https://api.telegram.org`)
+
+Safety behavior:
+
+- default behavior is **skip** (no outbound Telegram message)
+- CI only enables this test when Telegram secrets are configured
+- websocket delivery assertions still run to ensure signal fanout is not broken
