@@ -52,6 +52,7 @@ jobs:
           cargo test --test news_price_correlation_e2e -- --nocapture
           cargo test --test news_store_symbol_index_e2e -- --nocapture
           cargo test --test telegram_notifier_e2e -- --nocapture
+          cargo test --test news_telegram_rollout_env_e2e -- --nocapture
 
       - name: Run Telegram integration e2e (opt-in)
         if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
