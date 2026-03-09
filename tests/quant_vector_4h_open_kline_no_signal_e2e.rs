@@ -19,6 +19,10 @@ async fn quant_vector_ignores_open_4h_kline_events() {
         big_depth_min_notional: 0.0,
         big_depth_min_pressure_pct: 0.0,
         disable_depth_stream: false,
+        corr_min_move_pct: 0.25,
+        corr_max_lag_seconds: 300,
+        corr_min_confidence: 0.6,
+        news_streams: vec![],
     };
 
     let app = AppState::new(config);
