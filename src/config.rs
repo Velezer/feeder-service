@@ -18,6 +18,11 @@ pub struct Config {
     pub big_depth_min_pressure_pct: f64,
     /// When `true`, depth streams are not subscribed and depth messages are not processed.
     pub disable_depth_stream: bool,
+    pub corr_min_move_pct: f64,
+    pub corr_max_lag_seconds: u64,
+    pub corr_min_confidence: f64,
+    /// Optional extra stream names (e.g. provider-specific news streams) appended verbatim.
+    pub news_streams: Vec<String>,
     pub news: NewsConfig,
     pub telegram: TelegramConfig,
 }
@@ -108,6 +113,30 @@ impl Config {
             })
             .unwrap_or(false);
 
+        let corr_min_move_pct = env::var("CORR_MIN_MOVE_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.25);
+
+        let corr_max_lag_seconds = env::var("CORR_MAX_LAG_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300);
+
+        let corr_min_confidence = env::var("CORR_MIN_CONFIDENCE")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.60);
+
+        let news_streams = env::var("NEWS_STREAMS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
         let news = NewsConfig {
             enabled: env::var("ENABLE_NEWS_INGEST")
                 .map(|v| {
@@ -157,6 +186,10 @@ impl Config {
             big_depth_min_notional,
             big_depth_min_pressure_pct,
             disable_depth_stream,
+            corr_min_move_pct,
+            corr_max_lag_seconds,
+            corr_min_confidence,
+            news_streams,
             news,
             telegram,
         }

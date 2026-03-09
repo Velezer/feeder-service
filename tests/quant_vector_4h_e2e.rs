@@ -31,6 +31,10 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
         big_depth_min_notional: 0.0,
         big_depth_min_pressure_pct: 0.0,
         disable_depth_stream: false,
+        corr_min_move_pct: 0.25,
+        corr_max_lag_seconds: 300,
+        corr_min_confidence: 0.6,
+        news_streams: vec![],
         news: NewsConfig {
             enabled: false,
             db_path: "news.sqlite".to_string(),

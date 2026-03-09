@@ -1,6 +1,9 @@
 use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
+use feeder_service::config::Config;
+use feeder_service::correlation::engine::CorrelationEngine;
+use feeder_service::correlation::model::{MarketEvent, MarketEventKind, parse_news_event};
 use feeder_service::config::{Config, NewsConfig};
 use feeder_service::news::correlation::CorrelationService;
 use feeder_service::news::providers::fetch_all_news;
@@ -43,6 +46,11 @@ async fn main() {
     let mut config_map: HashMap<String, _> = HashMap::new();
     let mut last_prices: HashMap<String, f64> = HashMap::new();
     let mut big_move_detectors: HashMap<String, BigMoveDetector> = HashMap::new();
+    let mut correlation_engine = CorrelationEngine::new(
+        config.corr_min_move_pct,
+        config.corr_max_lag_seconds,
+        config.corr_min_confidence,
+    );
 
     // Symbol list (lowercase used later)
     let symbols: Vec<String> = config
@@ -140,6 +148,11 @@ async fn main() {
         );
     }
 
+    if !config.news_streams.is_empty() {
+        streams.extend(config.news_streams.iter().cloned());
+        println!("[INFO] Added extra news streams: {:?}", config.news_streams);
+    }
+
     let url = format!(
         "wss://data-stream.binance.vision/stream?streams={}",
         streams.join("/")
@@ -169,6 +182,7 @@ async fn main() {
                     &agg,
                     &config_map,
                     &mut last_prices,
+                    &mut correlation_engine,
                     &tx,
                     correlation_service.as_ref(),
                     notifier.as_ref(),
@@ -185,6 +199,7 @@ async fn main() {
                         &config_map,
                         &config,
                         &mut big_move_detectors,
+                        &mut correlation_engine,
                         &tx,
                         correlation_service.as_ref(),
                         notifier.as_ref(),
@@ -209,6 +224,12 @@ async fn main() {
                 }
             }
 
+            // 4) external news events used for correlation
+            if let Some(news_event) = parse_news_event(payload) {
+                correlation_engine.ingest_news(news_event);
+                continue;
+            }
+
             // Unknown / unhandled stream messages (optional logging controlled by env)
             if std::env::var_os("LOG_UNKNOWN_STREAM_MESSAGES").is_some() {
                 let snippet: String = payload.chars().take(180).collect();
@@ -227,6 +248,7 @@ async fn process_agg_trade(
     agg: &feeder_service::binance::AggTrade,
     config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     last_prices: &mut HashMap<String, f64>,
+    correlation_engine: &mut CorrelationEngine,
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
     notifier: &NotificationFanout,
@@ -240,6 +262,29 @@ async fn process_agg_trade(
     let current_price = agg.p.parse::<f64>().unwrap_or(0.0);
     let prev_price = last_prices.get(&symbol).copied();
     let spike = calc_spike(prev_price, current_price);
+    let qty = agg.q.parse::<f64>().unwrap_or(0.0);
+    let direction = if let Some(prev) = prev_price {
+        if current_price > prev {
+            1
+        } else if current_price < prev {
+            -1
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    let market_event = MarketEvent {
+        symbol: symbol.clone(),
+        timestamp_ms: agg.t,
+        kind: MarketEventKind::AggTrade,
+        move_pct: spike,
+        notional: current_price * qty,
+        direction,
+    };
+
+    emit_correlation(correlation_engine.on_market_event(market_event), tx);
 
     last_prices.insert(symbol.clone(), current_price);
 
@@ -268,6 +313,7 @@ async fn process_depth_update(
     config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     config: &Config,
     big_move_detectors: &mut HashMap<String, BigMoveDetector>,
+    correlation_engine: &mut CorrelationEngine,
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
     notifier: &NotificationFanout,
@@ -360,6 +406,24 @@ async fn process_depth_update(
 
     let pressure_bar = format_pressure_visual(bid_pressure_pct, 12);
 
+    let pressure_move = ((bid_pressure_pct - 50.0).abs() / 50.0) * 100.0;
+    let depth_market_event = MarketEvent {
+        symbol: symbol.clone(),
+        timestamp_ms: depth.event_time,
+        kind: MarketEventKind::DepthPressure,
+        move_pct: pressure_move,
+        notional: total_notional,
+        direction: if dominant_side == "BUY" {
+            1
+        } else if dominant_side == "SELL" {
+            -1
+        } else {
+            0
+        },
+    };
+
+    emit_correlation(correlation_engine.on_market_event(depth_market_event), tx);
+
     let depth_msg = format!(
         "[DEPTH] {} {} [{}] B:{:.1}% S:{:.1}% | notional {} vs {} | top {} / {}",
         depth.symbol.to_uppercase(),
@@ -434,6 +498,7 @@ async fn process_depth_update(
 async fn process_kline_event(
     event: &feeder_service::binance_kline::KlineEvent,
     config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
+    correlation_engine: &mut CorrelationEngine,
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
     notifier: &NotificationFanout,
@@ -444,6 +509,23 @@ async fn process_kline_event(
     }
 
     if let Some(signal) = build_quant_signal_from_kline(event) {
+        let market_event = MarketEvent {
+            symbol: symbol.clone(),
+            timestamp_ms: signal.interval_end_ms,
+            kind: MarketEventKind::KlineClose,
+            move_pct: signal.return_pct.abs(),
+            notional: signal.quote_volume,
+            direction: if signal.return_pct > 0.0 {
+                1
+            } else if signal.return_pct < 0.0 {
+                -1
+            } else {
+                0
+            },
+        };
+
+        emit_correlation(correlation_engine.on_market_event(market_event), tx);
+
         let direction = if signal.return_pct > 0.0 {
             "BULLISH"
         } else if signal.return_pct < 0.0 {
@@ -518,6 +600,36 @@ async fn build_and_send_enriched_payload(
     }
 }
 
+fn emit_correlation(
+    signal: Option<feeder_service::correlation::model::CorrelationSignal>,
+    tx: &broadcast::Sender<String>,
+) {
+    let Some(signal) = signal else {
+        return;
+    };
+
+    let kind = match signal.market_event_kind {
+        MarketEventKind::AggTrade => "aggTrade",
+        MarketEventKind::DepthPressure => "depth",
+        MarketEventKind::KlineClose => "kline",
+    };
+
+    let corr_msg = format!(
+        "[NEWS_CORR] {} kind={} conf={:.2} lag={}ms move={:+.3}% notional={:.0} windows=5m:{} 15m:{} 1h:{} headline=\"{}\"",
+        signal.symbol.to_uppercase(),
+        kind,
+        signal.confidence,
+        signal.lag_ms,
+        signal.move_pct,
+        signal.notional,
+        signal.window_5m_count,
+        signal.window_15m_count,
+        signal.window_1h_count,
+        signal.news_headline,
+    );
+
+    println!("{}", corr_msg);
+    let _ = tx.send(corr_msg);
 async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
     let store = NewsStore::new(news_config.db_path.clone());
     store.init()?;
