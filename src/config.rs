@@ -32,6 +32,9 @@ pub struct TelegramConfig {
     pub debounce_window_secs: u64,
 }
 
+    pub news: NewsConfig,
+}
+
 #[derive(Debug, Clone)]
 pub struct NewsConfig {
     pub enabled: bool,

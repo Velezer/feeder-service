@@ -2,6 +2,7 @@ use feeder_service::{
     binance_depth::DepthUpdate,
     binance_kline::parse_kline_event,
     config::{Config, NewsConfig, SymbolConfig, TelegramConfig},
+    config::{Config, NewsConfig, SymbolConfig},
     refactor::AppState,
 };
 use tokio::sync::broadcast;
