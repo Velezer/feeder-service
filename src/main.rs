@@ -74,9 +74,16 @@ async fn main() {
     }
 
     let (tx, _rx) = broadcast::channel(config.broadcast_capacity);
-    let notifier = Arc::new(NotificationFanout::new(Some(TelegramNotifier::new(
-        config.telegram.clone(),
-    ))));
+    let telegram_notifier = config
+        .telegram
+        .is_ready()
+        .then(|| TelegramNotifier::new(config.telegram.clone()));
+    if config.telegram.enabled && telegram_notifier.is_none() {
+        eprintln!(
+            "[notify/telegram] TELEGRAM enabled but missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID; Telegram fanout disabled"
+        );
+    }
+    let notifier = Arc::new(NotificationFanout::new(telegram_notifier));
     let correlation_service = NewsStore::new(config.news.db_path.clone());
     let correlation_service = match correlation_service.init() {
         Ok(()) => Some(CorrelationService::from_env(correlation_service)),
