@@ -219,6 +219,7 @@ async fn main() {
             // 3) kline updates (4h quant vector signal on closed candles)
             if enable_kline_quant {
                 if let Some(kline_event) = parse_kline_event(payload) {
+                    process_kline_event(&kline_event, &config_map, &mut correlation_engine, &tx);
                     process_kline_event(
                         &kline_event,
                         &config_map,
