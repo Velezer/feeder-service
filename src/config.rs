@@ -18,6 +18,9 @@ pub struct Config {
     pub big_depth_min_pressure_pct: f64,
     /// When `true`, depth streams are not subscribed and depth messages are not processed.
     pub disable_depth_stream: bool,
+    pub corr_min_move_pct: f64,
+    pub corr_max_lag_seconds: u64,
+    pub corr_min_confidence: f64,
 }
 
 impl Config {
@@ -86,6 +89,21 @@ impl Config {
             })
             .unwrap_or(false);
 
+        let corr_min_move_pct = env::var("CORR_MIN_MOVE_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.25);
+
+        let corr_max_lag_seconds = env::var("CORR_MAX_LAG_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300);
+
+        let corr_min_confidence = env::var("CORR_MIN_CONFIDENCE")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.60);
+
         Config {
             symbols,
             port,
@@ -94,6 +112,9 @@ impl Config {
             big_depth_min_notional,
             big_depth_min_pressure_pct,
             disable_depth_stream,
+            corr_min_move_pct,
+            corr_max_lag_seconds,
+            corr_min_confidence,
         }
     }
 
