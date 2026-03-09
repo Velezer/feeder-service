@@ -1,4 +1,3 @@
-// File: src/config.rs
 use std::env;
 
 #[derive(Debug, Clone)]
@@ -18,20 +17,6 @@ pub struct Config {
     pub big_depth_min_pressure_pct: f64,
     /// When `true`, depth streams are not subscribed and depth messages are not processed.
     pub disable_depth_stream: bool,
-    pub telegram: TelegramConfig,
-    pub news: NewsConfig,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TelegramConfig {
-    pub enabled: bool,
-    pub bot_token: Option<String>,
-    pub chat_id: Option<String>,
-    pub thread_id: Option<i64>,
-    pub include_bigmove: bool,
-    pub debounce_window_secs: u64,
-}
-
     pub corr_min_move_pct: f64,
     pub corr_max_lag_seconds: u64,
     pub corr_min_confidence: f64,
@@ -51,11 +36,14 @@ pub struct NewsConfig {
     pub newsapi_api_key: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TelegramConfig {
     pub enabled: bool,
     pub bot_token: Option<String>,
     pub chat_id: Option<String>,
+    pub thread_id: Option<i64>,
+    pub include_bigmove: bool,
+    pub debounce_window_secs: u64,
     pub min_correlation_score: f64,
     pub rate_limit_interval_secs: u64,
     pub api_base_url: String,
@@ -63,7 +51,6 @@ pub struct TelegramConfig {
 
 impl Config {
     pub fn load() -> Self {
-        // Global defaults (optional)
         let default_qty = env::var("BIG_TRADE_QTY")
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
@@ -74,7 +61,6 @@ impl Config {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.4);
 
-        // Parse symbols
         let symbols_str = env::var("SYMBOLS").unwrap_or_else(|_| "btcusdt".to_string());
 
         let symbols: Vec<SymbolConfig> = symbols_str
@@ -92,7 +78,6 @@ impl Config {
             })
             .collect();
 
-        // Load server config
         let port = env::var("PORT")
             .ok()
             .and_then(|v| v.parse::<u16>().ok())
@@ -118,42 +103,7 @@ impl Config {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.0);
 
-        let disable_depth_stream = env::var("DISABLE_DEPTH_STREAM")
-            .map(|v| {
-                // Trim surrounding whitespace and optional surrounding quotes
-                // (e.g. DISABLE_DEPTH_STREAM="true" in some .env parsers keeps the quotes)
-                let trimmed = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
-                matches!(trimmed.as_str(), "1" | "true" | "yes")
-            })
-            .unwrap_or(false);
-
-        let telegram = TelegramConfig {
-            enabled: env::var("TELEGRAM_ENABLED")
-                .map(|v| {
-                    let v = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
-                    matches!(v.as_str(), "1" | "true" | "yes")
-                })
-                .unwrap_or(false),
-            bot_token: env::var("TELEGRAM_BOT_TOKEN")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
-            chat_id: env::var("TELEGRAM_CHAT_ID")
-                .ok()
-                .filter(|v| !v.trim().is_empty()),
-            thread_id: env::var("TELEGRAM_THREAD_ID")
-                .ok()
-                .and_then(|v| v.parse::<i64>().ok()),
-            include_bigmove: env::var("TELEGRAM_INCLUDE_BIGMOVE")
-                .map(|v| {
-                    let v = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
-                    matches!(v.as_str(), "1" | "true" | "yes")
-                })
-                .unwrap_or(false),
-            debounce_window_secs: env::var("TELEGRAM_DEBOUNCE_WINDOW_SECS")
-                .ok()
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or(45),
-        };
+        let disable_depth_stream = Self::load_bool("DISABLE_DEPTH_STREAM", false);
 
         let corr_min_move_pct = env::var("CORR_MIN_MOVE_PCT")
             .ok()
@@ -174,19 +124,14 @@ impl Config {
             .ok()
             .map(|raw| {
                 raw.split(',')
-                    .map(|s| s.trim().to_string())
                     .map(|s| s.trim().to_lowercase())
                     .filter(|s| !s.is_empty())
                     .collect::<Vec<String>>()
             })
             .unwrap_or_default();
+
         let news = NewsConfig {
-            enabled: env::var("ENABLE_NEWS_INGEST")
-                .map(|v| {
-                    let value = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
-                    matches!(value.as_str(), "1" | "true" | "yes")
-                })
-                .unwrap_or(false),
+            enabled: Self::load_bool("ENABLE_NEWS_INGEST", false),
             db_path: env::var("NEWS_DB_PATH").unwrap_or_else(|_| "news.sqlite".to_string()),
             poll_interval_secs: env::var("NEWS_POLL_INTERVAL_SECS")
                 .ok()
@@ -201,14 +146,22 @@ impl Config {
         };
 
         let telegram = TelegramConfig {
-            enabled: env::var("ENABLE_TELEGRAM_NOTIFIER")
-                .map(|v| {
-                    let value = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
-                    matches!(value.as_str(), "1" | "true" | "yes")
-                })
-                .unwrap_or(false),
-            bot_token: env::var("TELEGRAM_BOT_TOKEN").ok(),
-            chat_id: env::var("TELEGRAM_CHAT_ID").ok(),
+            enabled: Self::load_bool("TELEGRAM_ENABLED", false)
+                || Self::load_bool("ENABLE_TELEGRAM_NOTIFIER", false),
+            bot_token: env::var("TELEGRAM_BOT_TOKEN")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            chat_id: env::var("TELEGRAM_CHAT_ID")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            thread_id: env::var("TELEGRAM_THREAD_ID")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok()),
+            include_bigmove: Self::load_bool("TELEGRAM_INCLUDE_BIGMOVE", false),
+            debounce_window_secs: env::var("TELEGRAM_DEBOUNCE_WINDOW_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(45),
             min_correlation_score: env::var("TELEGRAM_MIN_CORRELATION_SCORE")
                 .ok()
                 .and_then(|v| v.parse::<f64>().ok())
@@ -229,7 +182,6 @@ impl Config {
             big_depth_min_notional,
             big_depth_min_pressure_pct,
             disable_depth_stream,
-            telegram,
             corr_min_move_pct,
             corr_max_lag_seconds,
             corr_min_confidence,
@@ -239,6 +191,15 @@ impl Config {
         }
     }
 
+    fn load_bool(key: &str, default: bool) -> bool {
+        env::var(key)
+            .map(|v| {
+                let trimmed = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                matches!(trimmed.as_str(), "1" | "true" | "yes")
+            })
+            .unwrap_or(default)
+    }
+
     /// Helper: load per-symbol env variable, fallback to default
     fn load_symbol_env(symbol: &str, key: &str, default: f64) -> f64 {
         let env_key = format!("{}_{}", symbol.to_uppercase(), key);
@@ -246,5 +207,39 @@ impl Config {
             .ok()
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(default)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+    use std::sync::{Mutex, OnceLock};
+
+    fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn config_load_accepts_quoted_bool_values_and_trimmed_streams() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+
+        unsafe {
+            std::env::set_var("DISABLE_DEPTH_STREAM", "\"yes\"");
+            std::env::set_var("ENABLE_TELEGRAM_NOTIFIER", " true ");
+            std::env::set_var("NEWS_STREAMS", " alpha , , BETA ,,  ");
+        }
+
+        let config = Config::load();
+
+        assert!(config.disable_depth_stream);
+        assert!(config.telegram.enabled);
+        assert_eq!(config.news_streams, vec!["alpha".to_string(), "beta".to_string()]);
+
+        unsafe {
+            std::env::remove_var("DISABLE_DEPTH_STREAM");
+            std::env::remove_var("ENABLE_TELEGRAM_NOTIFIER");
+            std::env::remove_var("NEWS_STREAMS");
+        }
     }
 }

@@ -333,6 +333,9 @@ mod tests {
             thread_id: None,
             include_bigmove: false,
             debounce_window_secs: 60,
+            min_correlation_score: 0.0,
+            rate_limit_interval_secs: 0,
+            api_base_url: "https://api.telegram.org".to_string(),
         });
 
         assert!(!notifier.should_debounce("BTCUSDT:NEWS_CORR"));
