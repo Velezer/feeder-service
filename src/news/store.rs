@@ -5,6 +5,18 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone)]
+pub struct NewsRecord {
+    pub provider: String,
+    pub article_id: String,
+    pub published_at: i64,
+    pub title: String,
+    pub summary: String,
+    pub url: String,
+    pub symbols: Vec<String>,
+    pub sentiment_score: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct NewsStore {
     db_path: String,
 }
@@ -85,6 +97,66 @@ impl NewsStore {
         )?;
         Ok(deleted)
     }
+
+    pub fn get_recent_by_symbol(
+        &self,
+        symbol: &str,
+        from_ts: i64,
+        to_ts: i64,
+        limit: usize,
+    ) -> Result<Vec<NewsRecord>> {
+        let conn = Connection::open(&self.db_path)?;
+        let query_limit = (limit.max(1) * 4) as i64;
+        let mut stmt = conn.prepare(
+            "
+            SELECT provider, article_id, published_at, title, summary, url, symbols, sentiment_score
+            FROM news_items
+            WHERE published_at >= ?1 AND published_at <= ?2
+            ORDER BY published_at DESC
+            LIMIT ?3
+            ",
+        )?;
+
+        let rows = stmt.query_map(params![from_ts, to_ts, query_limit], |row| {
+            let raw_symbols: String = row.get(6)?;
+            let symbols = parse_symbols(&raw_symbols);
+            Ok(NewsRecord {
+                provider: row.get(0)?,
+                article_id: row.get(1)?,
+                published_at: row.get(2)?,
+                title: row.get(3)?,
+                summary: row.get(4)?,
+                url: row.get(5)?,
+                symbols,
+                sentiment_score: row.get(7)?,
+            })
+        })?;
+
+        let symbol_upper = symbol.to_ascii_uppercase();
+        let mut filtered = Vec::new();
+        for row in rows {
+            let news = row?;
+            if news
+                .symbols
+                .iter()
+                .any(|item| item.eq_ignore_ascii_case(&symbol_upper))
+            {
+                filtered.push(news);
+            }
+
+            if filtered.len() >= limit {
+                break;
+            }
+        }
+
+        Ok(filtered)
+    }
+}
+
+fn parse_symbols(raw: &str) -> Vec<String> {
+    serde_json::from_str::<Vec<String>>(raw)
+        .map(|items| items.into_iter().filter(|item| !item.trim().is_empty()).collect())
+        .unwrap_or_default()
 }
 
 fn hash_url(url: &str) -> String {
