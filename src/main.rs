@@ -3,7 +3,7 @@ use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
 use feeder_service::config::Config;
 use feeder_service::correlation::engine::CorrelationEngine;
-use feeder_service::correlation::model::{MarketEvent, MarketEventKind, NewsEvent};
+use feeder_service::correlation::model::{MarketEvent, MarketEventKind};
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
@@ -414,25 +414,6 @@ fn process_kline_event(
     }
 
     if let Some(signal) = build_quant_signal_from_kline(event) {
-        let sentiment = if signal.return_pct > 0.0 {
-            Some(1.0)
-        } else if signal.return_pct < 0.0 {
-            Some(-1.0)
-        } else {
-            Some(0.0)
-        };
-        correlation_engine.ingest_news(NewsEvent {
-            symbol: symbol.clone(),
-            timestamp_ms: signal.interval_end_ms,
-            headline: format!(
-                "4h candle close {} ret={:+.2}% range={:.2}%",
-                signal.symbol.to_uppercase(),
-                signal.return_pct,
-                signal.range_pct
-            ),
-            sentiment,
-        });
-
         let market_event = MarketEvent {
             symbol: symbol.clone(),
             timestamp_ms: signal.interval_end_ms,

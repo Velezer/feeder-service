@@ -18,9 +18,9 @@ pub struct CorrelationEngine {
 impl CorrelationEngine {
     pub fn new(min_move_pct: f64, max_lag_seconds: u64, min_confidence: f64) -> Self {
         Self {
-            min_move_pct,
-            max_lag_ms: (max_lag_seconds as i64).max(0) * 1_000,
-            min_confidence,
+            min_move_pct: min_move_pct.max(0.0),
+            max_lag_ms: (max_lag_seconds as i64) * 1_000,
+            min_confidence: min_confidence.clamp(0.0, 1.0),
             market_by_symbol: HashMap::new(),
             news_by_symbol: HashMap::new(),
         }
@@ -51,7 +51,7 @@ impl CorrelationEngine {
             (1.0 - (lag_ms.unsigned_abs() as f64 / self.max_lag_ms.max(1) as f64)).clamp(0.0, 1.0);
         let magnitude_score =
             (event.move_pct.abs() / (self.min_move_pct * 4.0).max(0.0001)).clamp(0.0, 1.0);
-        let notional_score = ((event.notional + 1.0).log10() / 7.0).clamp(0.0, 1.0);
+        let notional_score = ((event.notional.max(0.0) + 1.0).log10() / 7.0).clamp(0.0, 1.0);
         let sentiment_score = Self::sentiment_alignment_score(event.direction, news.sentiment);
 
         let confidence = (0.35 * magnitude_score)
@@ -159,5 +159,86 @@ impl CorrelationEngine {
         } else {
             0.0
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::correlation::model::MarketEventKind;
+
+    #[test]
+    fn emits_signal_when_within_lag_and_above_thresholds() {
+        let mut engine = CorrelationEngine::new(1.0, 60, 0.1);
+        engine.ingest_news(NewsEvent {
+            symbol: "btcusdt".to_string(),
+            timestamp_ms: 1_000,
+            headline: "ETF approval rumor".to_string(),
+            sentiment: Some(0.8),
+        });
+
+        let signal = engine.on_market_event(MarketEvent {
+            symbol: "BTCUSDT".to_string(),
+            timestamp_ms: 1_020,
+            kind: MarketEventKind::AggTrade,
+            move_pct: 2.5,
+            notional: 1_500_000.0,
+            direction: 1,
+        });
+
+        assert!(signal.is_some());
+        let signal = signal.expect("signal should exist");
+        assert_eq!(signal.lag_ms, 20);
+        assert_eq!(signal.window_5m_count, 1);
+    }
+
+    #[test]
+    fn skips_signal_when_news_lag_exceeds_max() {
+        let mut engine = CorrelationEngine::new(0.5, 10, 0.0);
+        engine.ingest_news(NewsEvent {
+            symbol: "ethusdt".to_string(),
+            timestamp_ms: 1_000,
+            headline: "Old headline".to_string(),
+            sentiment: None,
+        });
+
+        let signal = engine.on_market_event(MarketEvent {
+            symbol: "ETHUSDT".to_string(),
+            timestamp_ms: 20_500,
+            kind: MarketEventKind::DepthPressure,
+            move_pct: 4.0,
+            notional: 500_000.0,
+            direction: -1,
+        });
+
+        assert!(signal.is_none());
+    }
+
+    #[test]
+    fn tracks_rolling_windows_per_symbol() {
+        let mut engine = CorrelationEngine::new(0.0, 300, 0.0);
+        engine.ingest_news(NewsEvent {
+            symbol: "solusdt".to_string(),
+            timestamp_ms: 3_600_000,
+            headline: "Catalyst".to_string(),
+            sentiment: Some(0.2),
+        });
+
+        let timestamps = [2_600_000, 3_000_000, 3_510_000, 3_595_000];
+        for ts in timestamps {
+            let _ = engine.on_market_event(MarketEvent {
+                symbol: "SOLUSDT".to_string(),
+                timestamp_ms: ts,
+                kind: MarketEventKind::KlineClose,
+                move_pct: 1.1,
+                notional: 10_000.0,
+                direction: 1,
+            });
+        }
+
+        let (w5, w15, w60) = engine.window_counts("solusdt", 3_600_000);
+        assert_eq!(w5, 2);
+        assert_eq!(w15, 3);
+        assert_eq!(w60, 4);
     }
 }
