@@ -155,7 +155,12 @@ impl NewsStore {
 
 fn parse_symbols(raw: &str) -> Vec<String> {
     serde_json::from_str::<Vec<String>>(raw)
-        .map(|items| items.into_iter().filter(|item| !item.trim().is_empty()).collect())
+        .map(|items| {
+            items
+                .into_iter()
+                .filter(|item| !item.trim().is_empty())
+                .collect()
+        })
         .unwrap_or_default()
 }
 

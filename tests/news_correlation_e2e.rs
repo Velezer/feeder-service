@@ -77,8 +77,14 @@ async fn emits_enriched_json_with_news_matches_for_agg_trade() {
     let payload: serde_json::Value = serde_json::from_str(&second).expect("json payload");
     assert_eq!(payload["signal_type"], "agg_trade");
     assert_eq!(payload["symbol"], "BTCUSDT");
-    assert_eq!(payload["matched_news"][0]["headline"], "Bitcoin ETF inflow surges");
-    assert_eq!(payload["matched_news"][0]["url"], "https://example.com/bitcoin-etf");
+    assert_eq!(
+        payload["matched_news"][0]["headline"],
+        "Bitcoin ETF inflow surges"
+    );
+    assert_eq!(
+        payload["matched_news"][0]["url"],
+        "https://example.com/bitcoin-etf"
+    );
     assert!(payload["correlation_score"].as_f64().unwrap_or_default() > 0.0);
 
     let _ = std::fs::remove_file(db_path);
