@@ -1,7 +1,7 @@
 // File: src/ws_helpers.rs
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::{broadcast, oneshot};
-use tokio::time::{Duration, interval};
+use tokio::time::{Duration, Instant, interval};
 use warp::ws::{Message, WebSocket};
 
 pub type BroadcastRx = broadcast::Receiver<String>;
@@ -11,6 +11,7 @@ pub type WsTx = futures_util::stream::SplitSink<WebSocket, Message>;
 pub enum DisconnectReason {
     ClientClosed(Option<String>),
     HeartbeatSendFailed,
+    HeartbeatTimeout,
     BroadcastReceiveClosed,
     BroadcastForwardFailed,
     ReceiveError(String),
@@ -25,6 +26,7 @@ impl DisconnectReason {
             }
             Self::ClientClosed(_) => "client sent close frame without reason".to_string(),
             Self::HeartbeatSendFailed => "failed to send heartbeat ping".to_string(),
+            Self::HeartbeatTimeout => "client heartbeat timed out waiting for pong".to_string(),
             Self::BroadcastReceiveClosed => "broadcast channel closed".to_string(),
             Self::BroadcastForwardFailed => {
                 "failed to forward broadcast message to client".to_string()
@@ -62,7 +64,14 @@ pub async fn handle_incoming(ws_tx: &mut WsTx, msg: Message) -> Option<Disconnec
 }
 
 pub async fn handle_client(ws: WebSocket, tx: broadcast::Sender<String>) {
-    handle_client_with_notifier(ws, tx, None).await;
+    handle_client_with_settings(
+        ws,
+        tx,
+        None,
+        Duration::from_secs(15),
+        Duration::from_secs(45),
+    )
+    .await;
 }
 
 pub async fn handle_client_with_notifier(
@@ -70,15 +79,37 @@ pub async fn handle_client_with_notifier(
     tx: broadcast::Sender<String>,
     disconnect_notifier: Option<oneshot::Sender<String>>,
 ) {
+    handle_client_with_settings(
+        ws,
+        tx,
+        disconnect_notifier,
+        Duration::from_secs(15),
+        Duration::from_secs(45),
+    )
+    .await;
+}
+
+pub async fn handle_client_with_settings(
+    ws: WebSocket,
+    tx: broadcast::Sender<String>,
+    disconnect_notifier: Option<oneshot::Sender<String>>,
+    heartbeat_interval: Duration,
+    pong_timeout: Duration,
+) {
     let (mut ws_tx, mut ws_rx) = ws.split();
     let mut rx = tx.subscribe();
-    let mut heartbeat = interval(Duration::from_secs(15));
+    let mut heartbeat = interval(heartbeat_interval);
+    let mut last_pong = Instant::now();
 
     let disconnect_reason = loop {
         tokio::select! {
             _ = heartbeat.tick() => {
                 if send_heartbeat(&mut ws_tx).await.is_err() {
                     break DisconnectReason::HeartbeatSendFailed;
+                }
+
+                if last_pong.elapsed() > pong_timeout {
+                    break DisconnectReason::HeartbeatTimeout;
                 }
             }
             recv_result = rx.recv() => {
@@ -94,6 +125,11 @@ pub async fn handle_client_with_notifier(
             maybe_msg = ws_rx.next() => {
                 match maybe_msg {
                     Some(Ok(msg)) => {
+                        if msg.is_pong() {
+                            last_pong = Instant::now();
+                            continue;
+                        }
+
                         if let Some(reason) = handle_incoming(&mut ws_tx, msg).await {
                             break reason;
                         }

@@ -1,12 +1,16 @@
 use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
-use feeder_service::config::Config;
+use feeder_service::config::{Config, NewsConfig};
+use feeder_service::news::providers::fetch_all_news;
+use feeder_service::news::store::NewsStore;
+use feeder_service::news::tagging::tag_symbols;
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
+use tokio::time::{Duration, interval};
 use tokio_tungstenite::connect_async;
 use warp::Filter;
 
@@ -91,6 +95,17 @@ async fn main() {
     }
 
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
+
+    if config.news.enabled {
+        let news_cfg = config.news.clone();
+        tokio::spawn(async move {
+            if let Err(err) = run_news_ingest_loop(news_cfg).await {
+                eprintln!("[news] ingest loop terminated: {err}");
+            }
+        });
+    } else {
+        println!("[news] ingestion is disabled (set ENABLE_NEWS_INGEST=true to enable)");
+    }
 
     // Build Binance streams: aggTrade for each symbol + diff depth streams (unless disabled)
     let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
@@ -382,5 +397,42 @@ fn process_kline_event(
 
         println!("{}", msg);
         let _ = tx.send(msg);
+    }
+}
+
+async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
+    let store = NewsStore::new(news_config.db_path.clone());
+    store.init()?;
+
+    let http = reqwest::Client::builder()
+        .user_agent("feeder-service-news/0.1")
+        .timeout(Duration::from_secs(20))
+        .build()?;
+
+    let mut ticker = interval(Duration::from_secs(news_config.poll_interval_secs.max(30)));
+
+    loop {
+        ticker.tick().await;
+
+        let mut fetched = fetch_all_news(&http, &news_config).await?;
+        for item in &mut fetched {
+            tag_symbols(item);
+        }
+
+        fetched.sort_by_key(|item| item.published_at);
+
+        let inserted = store.upsert_many(&fetched)?;
+
+        let retention_cutoff =
+            chrono::Utc::now().timestamp() - (news_config.retention_hours * 3600);
+        let pruned = store.prune_older_than(retention_cutoff)?;
+
+        println!(
+            "[news] fetched={} inserted={} pruned={} db={}",
+            fetched.len(),
+            inserted,
+            pruned,
+            news_config.db_path
+        );
     }
 }
