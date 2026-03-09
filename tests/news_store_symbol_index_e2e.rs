@@ -90,7 +90,10 @@ fn backfills_symbol_table_and_prunes_dependent_rows() {
             |row| row.get(0),
         )
         .expect("count backfilled symbol rows");
-    assert_eq!(backfilled_count, 1, "symbol rows should be normalized and deduplicated");
+    assert_eq!(
+        backfilled_count, 1,
+        "symbol rows should be normalized and deduplicated"
+    );
 
     let recent = store
         .get_recent_by_symbol("BTCUSDT", 1_709_999_999_000, 1_710_000_001_000, 10)
