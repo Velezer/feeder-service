@@ -34,6 +34,7 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
         corr_min_move_pct: 0.25,
         corr_max_lag_seconds: 300,
         corr_min_confidence: 0.6,
+        news_streams: vec![],
     };
 
     let mut app = AppState::new(config);

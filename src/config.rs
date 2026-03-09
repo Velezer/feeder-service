@@ -21,6 +21,8 @@ pub struct Config {
     pub corr_min_move_pct: f64,
     pub corr_max_lag_seconds: u64,
     pub corr_min_confidence: f64,
+    /// Optional extra stream names (e.g. provider-specific news streams) appended verbatim.
+    pub news_streams: Vec<String>,
 }
 
 impl Config {
@@ -104,6 +106,16 @@ impl Config {
             .and_then(|v| v.parse::<f64>().ok())
             .unwrap_or(0.60);
 
+        let news_streams = env::var("NEWS_STREAMS")
+            .ok()
+            .map(|raw| {
+                raw.split(',')
+                    .map(|s| s.trim().to_lowercase())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<String>>()
+            })
+            .unwrap_or_default();
+
         Config {
             symbols,
             port,
@@ -115,6 +127,7 @@ impl Config {
             corr_min_move_pct,
             corr_max_lag_seconds,
             corr_min_confidence,
+            news_streams,
         }
     }
 

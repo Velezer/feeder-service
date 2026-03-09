@@ -115,6 +115,11 @@ async fn main() {
         );
     }
 
+    if !config.news_streams.is_empty() {
+        streams.extend(config.news_streams.iter().cloned());
+        println!("[INFO] Added extra news streams: {:?}", config.news_streams);
+    }
+
     let url = format!(
         "wss://data-stream.binance.vision/stream?streams={}",
         streams.join("/")
