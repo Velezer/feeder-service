@@ -18,6 +18,17 @@ pub struct Config {
     pub big_depth_min_pressure_pct: f64,
     /// When `true`, depth streams are not subscribed and depth messages are not processed.
     pub disable_depth_stream: bool,
+    pub telegram: TelegramConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct TelegramConfig {
+    pub enabled: bool,
+    pub bot_token: Option<String>,
+    pub chat_id: Option<String>,
+    pub thread_id: Option<i64>,
+    pub include_bigmove: bool,
+    pub debounce_window_secs: u64,
 }
 
 impl Config {
@@ -86,6 +97,34 @@ impl Config {
             })
             .unwrap_or(false);
 
+        let telegram = TelegramConfig {
+            enabled: env::var("TELEGRAM_ENABLED")
+                .map(|v| {
+                    let v = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                    matches!(v.as_str(), "1" | "true" | "yes")
+                })
+                .unwrap_or(false),
+            bot_token: env::var("TELEGRAM_BOT_TOKEN")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            chat_id: env::var("TELEGRAM_CHAT_ID")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            thread_id: env::var("TELEGRAM_THREAD_ID")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok()),
+            include_bigmove: env::var("TELEGRAM_INCLUDE_BIGMOVE")
+                .map(|v| {
+                    let v = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                    matches!(v.as_str(), "1" | "true" | "yes")
+                })
+                .unwrap_or(false),
+            debounce_window_secs: env::var("TELEGRAM_DEBOUNCE_WINDOW_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(45),
+        };
+
         Config {
             symbols,
             port,
@@ -94,6 +133,7 @@ impl Config {
             big_depth_min_notional,
             big_depth_min_pressure_pct,
             disable_depth_stream,
+            telegram,
         }
     }
 

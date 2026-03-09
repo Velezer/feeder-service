@@ -2,6 +2,7 @@ use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
 use feeder_service::config::Config;
+use feeder_service::notifiers::telegram::TelegramNotifier;
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
@@ -57,6 +58,12 @@ async fn main() {
     }
 
     let (tx, _rx) = broadcast::channel(config.broadcast_capacity);
+
+    let telegram_notifier = TelegramNotifier::new(config.telegram.clone());
+    let telegram_rx = tx.subscribe();
+    tokio::spawn(async move {
+        telegram_notifier.run(telegram_rx).await;
+    });
 
     // Spawn Warp server for websocket clients
     let ws_route = warp::path("aggTrade").and(warp::ws()).map({

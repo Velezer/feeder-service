@@ -1,6 +1,6 @@
 use feeder_service::{
     binance_kline::parse_kline_event,
-    config::{Config, SymbolConfig},
+    config::{Config, SymbolConfig, TelegramConfig},
     refactor::AppState,
 };
 use tokio::sync::broadcast;
@@ -19,6 +19,14 @@ async fn quant_vector_ignores_open_4h_kline_events() {
         big_depth_min_notional: 0.0,
         big_depth_min_pressure_pct: 0.0,
         disable_depth_stream: false,
+        telegram: TelegramConfig {
+            enabled: false,
+            bot_token: None,
+            chat_id: None,
+            thread_id: None,
+            include_bigmove: false,
+            debounce_window_secs: 45,
+        },
     };
 
     let app = AppState::new(config);

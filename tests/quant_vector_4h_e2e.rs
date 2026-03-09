@@ -1,7 +1,7 @@
 use feeder_service::{
     binance_depth::DepthUpdate,
     binance_kline::parse_kline_event,
-    config::{Config, SymbolConfig},
+    config::{Config, SymbolConfig, TelegramConfig},
     refactor::AppState,
 };
 use tokio::sync::broadcast;
@@ -31,6 +31,14 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
         big_depth_min_notional: 0.0,
         big_depth_min_pressure_pct: 0.0,
         disable_depth_stream: false,
+        telegram: TelegramConfig {
+            enabled: false,
+            bot_token: None,
+            chat_id: None,
+            thread_id: None,
+            include_bigmove: false,
+            debounce_window_secs: 45,
+        },
     };
 
     let mut app = AppState::new(config);
