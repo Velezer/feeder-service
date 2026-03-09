@@ -18,6 +18,17 @@ pub struct Config {
     pub big_depth_min_pressure_pct: f64,
     /// When `true`, depth streams are not subscribed and depth messages are not processed.
     pub disable_depth_stream: bool,
+    pub news: NewsConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewsConfig {
+    pub enabled: bool,
+    pub db_path: String,
+    pub poll_interval_secs: u64,
+    pub retention_hours: i64,
+    pub finnhub_api_key: Option<String>,
+    pub newsapi_api_key: Option<String>,
 }
 
 impl Config {
@@ -86,6 +97,26 @@ impl Config {
             })
             .unwrap_or(false);
 
+        let news = NewsConfig {
+            enabled: env::var("ENABLE_NEWS_INGEST")
+                .map(|v| {
+                    let value = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                    matches!(value.as_str(), "1" | "true" | "yes")
+                })
+                .unwrap_or(false),
+            db_path: env::var("NEWS_DB_PATH").unwrap_or_else(|_| "news.sqlite".to_string()),
+            poll_interval_secs: env::var("NEWS_POLL_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(300),
+            retention_hours: env::var("NEWS_RETENTION_HOURS")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(24 * 7),
+            finnhub_api_key: env::var("FINNHUB_API_KEY").ok(),
+            newsapi_api_key: env::var("NEWSAPI_API_KEY").ok(),
+        };
+
         Config {
             symbols,
             port,
@@ -94,6 +125,7 @@ impl Config {
             big_depth_min_notional,
             big_depth_min_pressure_pct,
             disable_depth_stream,
+            news,
         }
     }
 
