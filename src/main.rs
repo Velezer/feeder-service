@@ -4,11 +4,23 @@ use feeder_service::binance_kline::*;
 use feeder_service::config::Config;
 use feeder_service::correlation::engine::CorrelationEngine;
 use feeder_service::correlation::model::{MarketEvent, MarketEventKind, parse_news_event};
+use feeder_service::config::{Config, NewsConfig};
+use feeder_service::news::correlation::CorrelationService;
+use feeder_service::news::providers::fetch_all_news;
+use feeder_service::news::store::NewsStore;
+use feeder_service::news::tagging::tag_symbols;
+use feeder_service::notifiers::telegram::TelegramNotifier;
+use feeder_service::notify::{
+    NotificationFanout, build_signal_notification, telegram::TelegramNotifier,
+};
 use feeder_service::ws_helpers::*;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
+use serde_json::json;
 use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::broadcast;
+use tokio::time::{Duration, interval};
 use tokio_tungstenite::connect_async;
 use warp::Filter;
 
@@ -64,6 +76,23 @@ async fn main() {
     }
 
     let (tx, _rx) = broadcast::channel(config.broadcast_capacity);
+    let notifier = Arc::new(NotificationFanout::new(Some(TelegramNotifier::new(
+        config.telegram.clone(),
+    ))));
+    let correlation_service = NewsStore::new(config.news.db_path.clone());
+    let correlation_service = match correlation_service.init() {
+        Ok(()) => Some(CorrelationService::from_env(correlation_service)),
+        Err(err) => {
+            eprintln!("[news] correlation disabled, failed to init db: {err}");
+            None
+        }
+    };
+
+    let telegram_notifier = TelegramNotifier::new(config.telegram.clone());
+    let telegram_rx = tx.subscribe();
+    tokio::spawn(async move {
+        telegram_notifier.run(telegram_rx).await;
+    });
 
     // Spawn Warp server for websocket clients
     let ws_route = warp::path("aggTrade").and(warp::ws()).map({
@@ -98,6 +127,17 @@ async fn main() {
     }
 
     tokio::spawn(warp::serve(ws_route).run(([0, 0, 0, 0], config.port)));
+
+    if config.news.enabled {
+        let news_cfg = config.news.clone();
+        tokio::spawn(async move {
+            if let Err(err) = run_news_ingest_loop(news_cfg).await {
+                eprintln!("[news] ingest loop terminated: {err}");
+            }
+        });
+    } else {
+        println!("[news] ingestion is disabled (set ENABLE_NEWS_INGEST=true to enable)");
+    }
 
     // Build Binance streams: aggTrade for each symbol + diff depth streams (unless disabled)
     let mut streams: Vec<String> = symbols.iter().map(|s| format!("{}@aggTrade", s)).collect();
@@ -151,6 +191,8 @@ async fn main() {
                     &mut last_prices,
                     &mut correlation_engine,
                     &tx,
+                    correlation_service.as_ref(),
+                    notifier.as_ref(),
                 )
                 .await;
                 continue;
@@ -166,7 +208,10 @@ async fn main() {
                         &mut big_move_detectors,
                         &mut correlation_engine,
                         &tx,
-                    );
+                        correlation_service.as_ref(),
+                        notifier.as_ref(),
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -174,7 +219,14 @@ async fn main() {
             // 3) kline updates (4h quant vector signal on closed candles)
             if enable_kline_quant {
                 if let Some(kline_event) = parse_kline_event(payload) {
-                    process_kline_event(&kline_event, &config_map, &mut correlation_engine, &tx);
+                    process_kline_event(
+                        &kline_event,
+                        &config_map,
+                        &tx,
+                        correlation_service.as_ref(),
+                        notifier.as_ref(),
+                    )
+                    .await;
                     continue;
                 }
             }
@@ -205,6 +257,8 @@ async fn process_agg_trade(
     last_prices: &mut HashMap<String, f64>,
     correlation_engine: &mut CorrelationEngine,
     tx: &broadcast::Sender<String>,
+    correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
 ) {
     let symbol = agg.s.to_lowercase();
     let cfg = match config_map.get(&symbol) {
@@ -243,15 +297,33 @@ async fn process_agg_trade(
 
     // Preserve asynchronous logging & broadcasting behaviour
     log_and_broadcast(tx, agg, spike, cfg).await;
+
+    build_and_send_enriched_payload(
+        tx,
+        correlation_service,
+        notifier,
+        "agg_trade",
+        &symbol,
+        agg.t as i64,
+        json!({
+            "price": current_price,
+            "quantity": agg.q.parse::<f64>().unwrap_or(0.0),
+            "spike_pct": spike,
+            "buyer_maker": agg.m,
+        }),
+    )
+    .await;
 }
 
-fn process_depth_update(
+async fn process_depth_update(
     depth: &feeder_service::binance_depth::DepthUpdate,
     config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     config: &Config,
     big_move_detectors: &mut HashMap<String, BigMoveDetector>,
     correlation_engine: &mut CorrelationEngine,
     tx: &broadcast::Sender<String>,
+    correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
 ) {
     let symbol = depth.symbol.to_lowercase();
     let cfg = match config_map.get(&symbol) {
@@ -375,6 +447,23 @@ fn process_depth_update(
     println!("{}", depth_msg);
     let _ = tx.send(depth_msg.clone());
 
+    build_and_send_enriched_payload(
+        tx,
+        correlation_service,
+        notifier,
+        "depth_update",
+        &symbol,
+        depth.event_time as i64,
+        json!({
+            "bid_pressure_pct": bid_pressure_pct,
+            "sell_pressure_pct": sell_pressure_pct,
+            "total_notional": total_notional,
+            "top_bid_count": big_bids.len(),
+            "top_ask_count": big_asks.len(),
+        }),
+    )
+    .await;
+
     if let Some(detector) = big_move_detectors.get_mut(&symbol) {
         let snap = DepthSnapshot {
             bid_pressure_pct,
@@ -413,11 +502,13 @@ fn process_depth_update(
     }
 }
 
-fn process_kline_event(
+async fn process_kline_event(
     event: &feeder_service::binance_kline::KlineEvent,
     config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
     correlation_engine: &mut CorrelationEngine,
     tx: &broadcast::Sender<String>,
+    correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
 ) {
     let symbol = event.symbol.to_lowercase();
     if !config_map.contains_key(&symbol) {
@@ -469,6 +560,117 @@ fn process_kline_event(
 
         println!("{}", msg);
         let _ = tx.send(msg);
+
+        build_and_send_enriched_payload(
+            tx,
+            correlation_service,
+            notifier,
+            "kline_quant",
+            &symbol,
+            event.event_time as i64,
+            json!({
+                "return_pct": signal.return_pct,
+                "range_pct": signal.range_pct,
+                "taker_buy_ratio_pct": signal.taker_buy_ratio_pct,
+                "quote_volume": signal.quote_volume,
+                "trade_count": signal.trade_count,
+            }),
+        )
+        .await;
+    }
+}
+
+async fn build_and_send_enriched_payload(
+    tx: &broadcast::Sender<String>,
+    correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
+    signal_type: &str,
+    symbol: &str,
+    event_timestamp: i64,
+    move_metrics: serde_json::Value,
+) {
+    let Some(service) = correlation_service else {
+        return;
+    };
+
+    if let Ok(correlation) = service.correlate(symbol, event_timestamp) {
+        let payload = build_signal_notification(
+            signal_type,
+            symbol,
+            event_timestamp,
+            move_metrics,
+            &correlation.matches,
+            correlation.score,
+        );
+
+        notifier.dispatch(tx, payload).await;
+    }
+}
+
+fn emit_correlation(
+    signal: Option<feeder_service::correlation::model::CorrelationSignal>,
+    tx: &broadcast::Sender<String>,
+) {
+    let Some(signal) = signal else {
+        return;
+    };
+
+    let kind = match signal.market_event_kind {
+        MarketEventKind::AggTrade => "aggTrade",
+        MarketEventKind::DepthPressure => "depth",
+        MarketEventKind::KlineClose => "kline",
+    };
+
+    let corr_msg = format!(
+        "[NEWS_CORR] {} kind={} conf={:.2} lag={}ms move={:+.3}% notional={:.0} windows=5m:{} 15m:{} 1h:{} headline=\"{}\"",
+        signal.symbol.to_uppercase(),
+        kind,
+        signal.confidence,
+        signal.lag_ms,
+        signal.move_pct,
+        signal.notional,
+        signal.window_5m_count,
+        signal.window_15m_count,
+        signal.window_1h_count,
+        signal.news_headline,
+    );
+
+    println!("{}", corr_msg);
+    let _ = tx.send(corr_msg);
+async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
+    let store = NewsStore::new(news_config.db_path.clone());
+    store.init()?;
+
+    let http = reqwest::Client::builder()
+        .user_agent("feeder-service-news/0.1")
+        .timeout(Duration::from_secs(20))
+        .build()?;
+
+    let mut ticker = interval(Duration::from_secs(news_config.poll_interval_secs.max(30)));
+
+    loop {
+        ticker.tick().await;
+
+        let mut fetched = fetch_all_news(&http, &news_config).await?;
+        for item in &mut fetched {
+            tag_symbols(item);
+        }
+
+        fetched.sort_by_key(|item| item.published_at);
+
+        let inserted = store.upsert_many(&fetched)?;
+
+        let retention_cutoff =
+            chrono::Utc::now().timestamp() - (news_config.retention_hours * 3600);
+        let pruned = store.prune_older_than(retention_cutoff)?;
+
+        println!(
+            "[news] fetched={} inserted={} pruned={} db={}",
+            fetched.len(),
+            inserted,
+            pruned,
+            news_config.db_path
+        );
     }
 }
 

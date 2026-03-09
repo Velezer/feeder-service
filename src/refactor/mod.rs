@@ -1,4 +1,7 @@
 use std::collections::HashMap;
+
+use anyhow::Result;
+use serde_json::json;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -9,6 +12,8 @@ use crate::{
     },
     binance_kline::{KlineEvent, build_quant_signal_from_kline},
     config::{Config, SymbolConfig},
+    news::{correlation::CorrelationService, store::NewsStore},
+    notify::{NotificationFanout, build_signal_notification, telegram::TelegramNotifier},
 };
 
 use self::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
@@ -24,6 +29,8 @@ pub struct AppState {
     last_prices: HashMap<String, f64>,
     /// Map of symbol to big move detector
     big_move_detectors: HashMap<String, BigMoveDetector>,
+    correlation_service: Option<CorrelationService>,
+    notifier: NotificationFanout,
 }
 
 impl AppState {
@@ -46,14 +53,60 @@ impl AppState {
             );
         }
 
+        let correlation_service = Self::build_correlation_service(&config).ok();
+
+        let telegram = TelegramNotifier::new(config.telegram.clone());
+
         Self {
             config,
             config_map,
             last_prices: HashMap::new(),
             big_move_detectors,
+            correlation_service,
+            notifier: NotificationFanout::new(Some(telegram)),
         }
     }
 
+    fn build_correlation_service(config: &Config) -> Result<CorrelationService> {
+        let store = NewsStore::new(config.news.db_path.clone());
+        store.init()?;
+        Ok(CorrelationService::from_env(store))
+    }
+
+    fn build_enriched_payload(
+        &self,
+        signal_type: &str,
+        symbol: &str,
+        event_ts_ms: i64,
+        move_metrics: serde_json::Value,
+    ) -> Option<crate::notify::SignalNotification> {
+        let service = self.correlation_service.as_ref()?;
+        let correlation = service.correlate(symbol, event_ts_ms).ok()?;
+
+        Some(build_signal_notification(
+            signal_type,
+            symbol,
+            event_ts_ms,
+            move_metrics,
+            &correlation.matches,
+            correlation.score,
+        ))
+    }
+
+    async fn send_enriched_payload(
+        &self,
+        tx: &broadcast::Sender<String>,
+        signal_type: &str,
+        symbol: &str,
+        event_ts_ms: i64,
+        move_metrics: serde_json::Value,
+    ) {
+        if let Some(payload) =
+            self.build_enriched_payload(signal_type, symbol, event_ts_ms, move_metrics)
+        {
+            self.notifier.dispatch(tx, payload).await;
+        }
+    }
     pub async fn process_agg_trade(&mut self, agg: &AggTrade, tx: &broadcast::Sender<String>) {
         let symbol = agg.s.to_lowercase();
         let cfg = match self.config_map.get(&symbol) {
@@ -68,9 +121,27 @@ impl AppState {
         self.last_prices.insert(symbol.clone(), current_price);
 
         log_and_broadcast(tx, agg, spike, cfg).await;
+
+        self.send_enriched_payload(
+            tx,
+            "agg_trade",
+            &symbol,
+            agg.t as i64,
+            json!({
+                "price": current_price,
+                "quantity": agg.q.parse::<f64>().unwrap_or(0.0),
+                "spike_pct": spike,
+                "buyer_maker": agg.m,
+            }),
+        )
+        .await;
     }
 
-    pub fn process_depth_update(&mut self, depth: &DepthUpdate, tx: &broadcast::Sender<String>) {
+    pub async fn process_depth_update(
+        &mut self,
+        depth: &DepthUpdate,
+        tx: &broadcast::Sender<String>,
+    ) {
         let symbol = depth.symbol.to_lowercase();
         let cfg = match self.config_map.get(&symbol) {
             Some(c) => c,
@@ -105,6 +176,21 @@ impl AppState {
 
         println!("{}", depth_msg);
         let _ = tx.send(depth_msg.clone());
+
+        self.send_enriched_payload(
+            tx,
+            "depth_update",
+            &symbol,
+            depth.event_time as i64,
+            json!({
+                "bid_pressure_pct": bid_pressure_pct,
+                "sell_pressure_pct": sell_pressure_pct,
+                "total_notional": total_notional,
+                "top_bid_count": big_bids.len(),
+                "top_ask_count": big_asks.len(),
+            }),
+        )
+        .await;
 
         self.detect_big_move(&symbol, bid_pressure_pct, total_notional, depth, tx);
     }
@@ -200,7 +286,7 @@ impl AppState {
             top_ask
         )
     }
-    pub fn process_kline_event(&self, event: &KlineEvent, tx: &broadcast::Sender<String>) {
+    pub async fn process_kline_event(&self, event: &KlineEvent, tx: &broadcast::Sender<String>) {
         let symbol = event.symbol.to_lowercase();
         if !self.config_map.contains_key(&symbol) {
             return;
@@ -233,6 +319,21 @@ impl AppState {
             );
             println!("{}", msg);
             let _ = tx.send(msg);
+
+            self.send_enriched_payload(
+                tx,
+                "kline_quant",
+                &symbol,
+                event.event_time as i64,
+                json!({
+                    "return_pct": signal.return_pct,
+                    "range_pct": signal.range_pct,
+                    "taker_buy_ratio_pct": signal.taker_buy_ratio_pct,
+                    "quote_volume": signal.quote_volume,
+                    "trade_count": signal.trade_count,
+                }),
+            )
+            .await;
         }
     }
 
