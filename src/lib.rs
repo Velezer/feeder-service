@@ -7,3 +7,5 @@ pub mod json_helpers;
 pub mod refactor;
 pub mod time_helpers;
 pub mod ws_helpers;
+
+pub mod news;

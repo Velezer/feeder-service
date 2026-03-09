@@ -1,7 +1,7 @@
 use feeder_service::{
     binance_depth::DepthUpdate,
     binance_kline::parse_kline_event,
-    config::{Config, SymbolConfig},
+    config::{Config, NewsConfig, SymbolConfig},
     refactor::AppState,
 };
 use tokio::sync::broadcast;
@@ -35,6 +35,14 @@ async fn quant_vector_uses_closed_4h_kline_and_stays_separate_from_depth() {
         corr_max_lag_seconds: 300,
         corr_min_confidence: 0.6,
         news_streams: vec![],
+        news: NewsConfig {
+            enabled: false,
+            db_path: "news.sqlite".to_string(),
+            poll_interval_secs: 300,
+            retention_hours: 168,
+            finnhub_api_key: None,
+            newsapi_api_key: None,
+        },
     };
 
     let mut app = AppState::new(config);

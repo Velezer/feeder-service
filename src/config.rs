@@ -23,6 +23,17 @@ pub struct Config {
     pub corr_min_confidence: f64,
     /// Optional extra stream names (e.g. provider-specific news streams) appended verbatim.
     pub news_streams: Vec<String>,
+    pub news: NewsConfig,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewsConfig {
+    pub enabled: bool,
+    pub db_path: String,
+    pub poll_interval_secs: u64,
+    pub retention_hours: i64,
+    pub finnhub_api_key: Option<String>,
+    pub newsapi_api_key: Option<String>,
 }
 
 impl Config {
@@ -115,6 +126,25 @@ impl Config {
                     .collect::<Vec<String>>()
             })
             .unwrap_or_default();
+        let news = NewsConfig {
+            enabled: env::var("ENABLE_NEWS_INGEST")
+                .map(|v| {
+                    let value = v.trim().trim_matches('"').trim_matches('\'').to_lowercase();
+                    matches!(value.as_str(), "1" | "true" | "yes")
+                })
+                .unwrap_or(false),
+            db_path: env::var("NEWS_DB_PATH").unwrap_or_else(|_| "news.sqlite".to_string()),
+            poll_interval_secs: env::var("NEWS_POLL_INTERVAL_SECS")
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(300),
+            retention_hours: env::var("NEWS_RETENTION_HOURS")
+                .ok()
+                .and_then(|v| v.parse::<i64>().ok())
+                .unwrap_or(24 * 7),
+            finnhub_api_key: env::var("FINNHUB_API_KEY").ok(),
+            newsapi_api_key: env::var("NEWSAPI_API_KEY").ok(),
+        };
 
         Config {
             symbols,
@@ -128,6 +158,7 @@ impl Config {
             corr_max_lag_seconds,
             corr_min_confidence,
             news_streams,
+            news,
         }
     }
 
