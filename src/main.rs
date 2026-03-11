@@ -12,6 +12,7 @@ use feeder_service::notify::{
     NotificationFanout, build_signal_notification, telegram::TelegramNotifier,
 };
 use feeder_service::ws_helpers::*;
+use chrono::Utc;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use serde_json::json;
@@ -23,6 +24,7 @@ use tokio_tungstenite::connect_async;
 use warp::Filter;
 
 use feeder_service::refactor::big_move_detector::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
+use feeder_service::time_helpers::format_daily_time_resistance_log;
 
 #[tokio::main]
 async fn main() {
@@ -151,6 +153,35 @@ async fn main() {
     } else {
         println!(
             "[INFO] Kline quant analysis is inactive (set ENABLE_KLINE_QUANT=true to enable)."
+        );
+    }
+
+    let daily_offset_hours = std::env::var("TIME_RESISTANCE_DAILY_UTC_OFFSET_HOURS")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(0);
+    let reversal_window_minutes = std::env::var("TIME_RESISTANCE_REVERSAL_WINDOW_MINUTES")
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(360);
+    let astro_weight = std::env::var("TIME_RESISTANCE_ASTRO_WEIGHT")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .unwrap_or(0.35);
+    let now_ms = Utc::now().timestamp_millis();
+    if let Some(line) = format_daily_time_resistance_log(
+        now_ms,
+        daily_offset_hours,
+        reversal_window_minutes,
+        astro_weight,
+    ) {
+        println!("{}", line);
+    } else {
+        eprintln!(
+            "[TIME_RESISTANCE][1D] unable to compute boundary | session_offset={:+} | window={}m | astro_weight={:.2}",
+            daily_offset_hours,
+            reversal_window_minutes,
+            astro_weight
         );
     }
 
