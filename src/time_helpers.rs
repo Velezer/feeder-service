@@ -141,8 +141,8 @@ pub fn format_daily_time_resistance_log(
 mod tests {
     use super::{
         astrology_adjusted_reversal_probability_pct, daily_reversal_probability_pct,
-        format_daily_time_resistance_log, lunar_phase_reversal_factor, next_daily_time_resistance_ms,
-        next_time_resistance_ms,
+        format_daily_time_resistance_log, lunar_phase_reversal_factor,
+        next_daily_time_resistance_ms, next_time_resistance_ms,
     };
 
     #[test]

@@ -136,7 +136,10 @@ async fn correlates_real_tagged_news_for_app_state_signals() {
     let score = payload["correlation_score"]
         .as_f64()
         .expect("correlation score");
-    assert!((score - 0.4).abs() < f64::EPSILON, "unexpected score: {score}");
+    assert!(
+        (score - 0.4).abs() < f64::EPSILON,
+        "unexpected score: {score}"
+    );
 
     let _ = std::fs::remove_file(db_path);
 }
