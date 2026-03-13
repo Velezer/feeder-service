@@ -21,6 +21,10 @@ fn rust_tests_workflow_keeps_format_gate_and_core_test_steps() {
         workflow.contains("cargo test --test telegram_notifier_e2e -- --nocapture"),
         "workflow should keep non-destructive e2e coverage"
     );
+    assert!(
+        workflow.contains("cargo test --test telegram_alert_e2e -- --nocapture"),
+        "workflow should run skip-safe Telegram e2e without requiring secrets"
+    );
 }
 
 #[test]

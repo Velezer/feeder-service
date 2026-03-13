@@ -54,11 +54,5 @@ jobs:
           cargo test --test telegram_notifier_e2e -- --nocapture
           cargo test --test news_telegram_rollout_env_e2e -- --nocapture
 
-      - name: Run Telegram integration e2e (opt-in)
-        if: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
-        env:
-          TELEGRAM_E2E: '1'
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          TELEGRAM_API_BASE_URL: ${{ secrets.TELEGRAM_API_BASE_URL || 'https://api.telegram.org' }}
+      - name: Run Telegram integration e2e (skip-safe, no secrets required)
         run: cargo test --test telegram_alert_e2e -- --nocapture

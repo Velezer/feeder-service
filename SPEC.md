@@ -25,4 +25,5 @@ It ingests trade streams, detects significant trade events, and distributes them
 - **Telegram Delivery Behavior**: Telegram fanout is optional and non-blocking.
   - If Telegram is disabled or credentials are missing, stream processing remains active without notifier startup.
   - Delivery failures are logged and must not block websocket fanout or signal processing.
+  - CI executes Telegram e2e in skip-safe mode by default, so pipeline success does not require Telegram secrets.
 
