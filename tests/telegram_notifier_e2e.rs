@@ -10,6 +10,26 @@ use serde_json::json;
 use tokio::sync::broadcast;
 use warp::Filter;
 
+async fn wait_for_message_count(
+    captured: &Arc<Mutex<Vec<String>>>,
+    expected: usize,
+    timeout: Duration,
+) {
+    let start = std::time::Instant::now();
+    loop {
+        if captured.lock().unwrap().len() >= expected {
+            return;
+        }
+
+        assert!(
+            start.elapsed() < timeout,
+            "timed out waiting for {expected} Telegram message(s)"
+        );
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test]
 async fn sends_telegram_message_with_compact_template_and_links() {
     let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
@@ -69,7 +89,7 @@ async fn sends_telegram_message_with_compact_template_and_links() {
     let ws_payload = rx.recv().await.expect("ws payload");
     assert!(ws_payload.contains("\"signal_type\":\"kline_quant\""));
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    wait_for_message_count(&captured, 1, Duration::from_secs(2)).await;
 
     let sent = captured.lock().unwrap().clone();
     assert_eq!(sent.len(), 1);
