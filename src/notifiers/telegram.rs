@@ -87,6 +87,9 @@ impl TelegramNotifier {
         }
     }
 
+    /// Returns `true` when an event key has been seen inside the debounce window.
+    ///
+    /// This keeps in-memory state bounded by periodically evicting stale keys.
     fn should_debounce(&mut self, key: &str) -> bool {
         let now = Instant::now();
         let debounce_window = Duration::from_secs(self.config.debounce_window_secs.max(1));
@@ -94,10 +97,10 @@ impl TelegramNotifier {
         self.dedupe_state
             .retain(|_, ts| now.duration_since(*ts) <= debounce_window);
 
-        if let Some(last) = self.dedupe_state.get(key)
-            && now.duration_since(*last) < debounce_window
-        {
-            return true;
+        if let Some(last) = self.dedupe_state.get(key) {
+            if now.duration_since(*last) < debounce_window {
+                return true;
+            }
         }
 
         self.dedupe_state.insert(key.to_string(), now);
@@ -322,6 +325,15 @@ mod tests {
         let msg = "[BIGMOVE] BTCUSDT BULLISH BREAKOUT likely! avg_pressure=80.2% notional=12345";
         assert!(ParsedEvent::from_broadcast(msg, false).is_none());
         assert!(ParsedEvent::from_broadcast(msg, true).is_some());
+    }
+
+    #[test]
+    fn parses_news_corr_with_fallback_prefixes() {
+        let msg = "[NEWS_CORR] symbol=ETHUSDT move_pct=-1.20% conf=61.3 catalyst headline";
+        let event = ParsedEvent::from_broadcast(msg, true).expect("expected parse");
+        assert_eq!(event.symbol, "ETHUSDT");
+        assert_eq!(event.move_pct, Some(-1.2));
+        assert_eq!(event.confidence, Some(61.3));
     }
 
     #[test]
