@@ -252,7 +252,10 @@ mod tests {
 
         assert!(config.disable_depth_stream);
         assert!(config.telegram.enabled);
-        assert_eq!(config.news_streams, vec!["alpha".to_string(), "beta".to_string()]);
+        assert_eq!(
+            config.news_streams,
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
 
         unsafe {
             std::env::remove_var("DISABLE_DEPTH_STREAM");

@@ -1,9 +1,10 @@
+use chrono::Utc;
 use feeder_service::binance::*;
 use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
+use feeder_service::config::{Config, NewsConfig};
 use feeder_service::correlation::engine::CorrelationEngine;
 use feeder_service::correlation::model::{MarketEvent, MarketEventKind, parse_news_event};
-use feeder_service::config::{Config, NewsConfig};
 use feeder_service::news::correlation::CorrelationService;
 use feeder_service::news::providers::fetch_all_news;
 use feeder_service::news::store::NewsStore;
@@ -12,7 +13,6 @@ use feeder_service::notify::{
     NotificationFanout, build_signal_notification, telegram::TelegramNotifier,
 };
 use feeder_service::ws_helpers::*;
-use chrono::Utc;
 use futures_util::StreamExt;
 use local_ip_address::local_ip;
 use serde_json::json;
@@ -179,9 +179,7 @@ async fn main() {
     } else {
         eprintln!(
             "[TIME_RESISTANCE][1D] unable to compute boundary | session_offset={:+} | window={}m | astro_weight={:.2}",
-            daily_offset_hours,
-            reversal_window_minutes,
-            astro_weight
+            daily_offset_hours, reversal_window_minutes, astro_weight
         );
     }
 
