@@ -499,7 +499,10 @@ async fn process_depth_update(
             total_notional,
         };
 
-        match detector.push(snap) {
+        let evaluation = detector.push_with_self_explanation(snap);
+        println!("{}", evaluation.self_explanation_log);
+
+        match evaluation.signal {
             BigMoveSignal::BullishBreakout {
                 avg_pressure,
                 total_notional,

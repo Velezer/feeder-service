@@ -22,7 +22,7 @@ pub struct DepthSnapshot {
     pub total_notional: f64,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum BigMoveSignal {
     BullishBreakout {
         avg_pressure: f64,
@@ -33,6 +33,12 @@ pub enum BigMoveSignal {
         total_notional: f64,
     },
     None,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct BigMoveEvaluation {
+    pub signal: BigMoveSignal,
+    pub self_explanation_log: String,
 }
 
 impl BigMoveDetector {
@@ -53,13 +59,25 @@ impl BigMoveDetector {
 
     /// Push a new depth snapshot and evaluate.
     pub fn push(&mut self, snapshot: DepthSnapshot) -> BigMoveSignal {
+        self.push_with_self_explanation(snapshot).signal
+    }
+
+    /// Push a new depth snapshot and evaluate with an operator-facing explanation line.
+    pub fn push_with_self_explanation(&mut self, snapshot: DepthSnapshot) -> BigMoveEvaluation {
         if self.window.len() == self.window_size {
             self.window.pop_front();
         }
         self.window.push_back(snapshot);
 
         if self.window.len() < self.min_consecutive {
-            return BigMoveSignal::None;
+            return BigMoveEvaluation {
+                signal: BigMoveSignal::None,
+                self_explanation_log: format!(
+                    "[BIGMOVE][SELF_EXPLAIN] insufficient history ({}/{})",
+                    self.window.len(),
+                    self.min_consecutive
+                ),
+            };
         }
 
         // Check last `min_consecutive` snapshots for consistent extreme pressure
@@ -78,7 +96,14 @@ impl BigMoveDetector {
             .all(|s| (100.0 - s.bid_pressure_pct) >= self.pressure_threshold);
 
         if !all_bullish && !all_bearish {
-            return BigMoveSignal::None;
+            return BigMoveEvaluation {
+                signal: BigMoveSignal::None,
+                self_explanation_log: format!(
+                    "[BIGMOVE][SELF_EXPLAIN] no consistent extreme pressure in last {} snapshots (threshold={:.1}%)",
+                    self.min_consecutive,
+                    self.pressure_threshold
+                ),
+            };
         }
 
         let avg_pressure: f64 =
@@ -87,19 +112,99 @@ impl BigMoveDetector {
             recent.iter().map(|s| s.total_notional).sum::<f64>() / recent.len() as f64;
 
         if avg_notional < self.min_total_notional {
-            return BigMoveSignal::None;
+            return BigMoveEvaluation {
+                signal: BigMoveSignal::None,
+                self_explanation_log: format!(
+                    "[BIGMOVE][SELF_EXPLAIN] pressure extreme but notional too small ({:.0} < {:.0})",
+                    avg_notional,
+                    self.min_total_notional
+                ),
+            };
         }
 
         if all_bullish {
-            BigMoveSignal::BullishBreakout {
-                avg_pressure,
-                total_notional: avg_notional,
+            BigMoveEvaluation {
+                signal: BigMoveSignal::BullishBreakout {
+                    avg_pressure,
+                    total_notional: avg_notional,
+                },
+                self_explanation_log: format!(
+                    "[BIGMOVE][SELF_EXPLAIN] bullish breakout: avg_pressure={:.1}% avg_notional={:.0} threshold={:.1}%",
+                    avg_pressure,
+                    avg_notional,
+                    self.pressure_threshold
+                ),
             }
         } else {
-            BigMoveSignal::BearishBreakout {
-                avg_pressure: 100.0 - avg_pressure,
-                total_notional: avg_notional,
+            let bearish_pressure = 100.0 - avg_pressure;
+            BigMoveEvaluation {
+                signal: BigMoveSignal::BearishBreakout {
+                    avg_pressure: bearish_pressure,
+                    total_notional: avg_notional,
+                },
+                self_explanation_log: format!(
+                    "[BIGMOVE][SELF_EXPLAIN] bearish breakout: avg_pressure={:.1}% avg_notional={:.0} threshold={:.1}%",
+                    bearish_pressure,
+                    avg_notional,
+                    self.pressure_threshold
+                ),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BigMoveDetector, BigMoveSignal, DepthSnapshot};
+
+    #[test]
+    fn self_explanation_reports_insufficient_history() {
+        let mut detector = BigMoveDetector::new(5, 75.0, 0.0, 3);
+        let result = detector.push_with_self_explanation(DepthSnapshot {
+            bid_pressure_pct: 80.0,
+            total_notional: 10_000.0,
+        });
+
+        assert_eq!(result.signal, BigMoveSignal::None);
+        assert!(result.self_explanation_log.contains("insufficient history"));
+    }
+
+    #[test]
+    fn self_explanation_reports_bullish_breakout() {
+        let mut detector = BigMoveDetector::new(5, 75.0, 0.0, 3);
+        for pressure in [80.0, 82.0, 85.0] {
+            let _ = detector.push_with_self_explanation(DepthSnapshot {
+                bid_pressure_pct: pressure,
+                total_notional: 50_000.0,
+            });
+        }
+
+        let result = detector.push_with_self_explanation(DepthSnapshot {
+            bid_pressure_pct: 88.0,
+            total_notional: 50_000.0,
+        });
+
+        assert!(matches!(result.signal, BigMoveSignal::BullishBreakout { .. }));
+        assert!(result.self_explanation_log.contains("bullish breakout"));
+    }
+
+    #[test]
+    fn self_explanation_reports_notional_filter_failure() {
+        let mut detector = BigMoveDetector::new(5, 75.0, 100_000.0, 3);
+        let _ = detector.push_with_self_explanation(DepthSnapshot {
+            bid_pressure_pct: 80.0,
+            total_notional: 1_000.0,
+        });
+        let _ = detector.push_with_self_explanation(DepthSnapshot {
+            bid_pressure_pct: 81.0,
+            total_notional: 1_000.0,
+        });
+        let result = detector.push_with_self_explanation(DepthSnapshot {
+            bid_pressure_pct: 82.0,
+            total_notional: 1_000.0,
+        });
+
+        assert_eq!(result.signal, BigMoveSignal::None);
+        assert!(result.self_explanation_log.contains("notional too small"));
     }
 }
