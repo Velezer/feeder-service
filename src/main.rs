@@ -659,7 +659,7 @@ async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
     loop {
         ticker.tick().await;
 
-        let mut fetched = fetch_all_news(&http, &news_config).await?;
+        let (mut fetched, diagnostics) = fetch_all_news(&http, &news_config).await?;
         for item in &mut fetched {
             tag_symbols(item);
         }
@@ -672,12 +672,16 @@ async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
             chrono::Utc::now().timestamp() - (news_config.retention_hours * 3600);
         let pruned = store.prune_older_than(retention_cutoff)?;
 
+        let reason = diagnostics.fetch_reason(fetched.len());
+
         println!(
-            "[news] fetched={} inserted={} pruned={} db={}",
+            "[news] fetched={} inserted={} pruned={} db={} reason={} providers={}",
             fetched.len(),
             inserted,
             pruned,
-            news_config.db_path
+            news_config.db_path,
+            reason,
+            diagnostics.provider_state_summary(),
         );
     }
 }
