@@ -156,8 +156,8 @@ impl Config {
                 .ok()
                 .and_then(|v| v.parse::<i64>().ok())
                 .unwrap_or(24 * 7),
-            finnhub_api_key: env::var("FINNHUB_API_KEY").ok(),
-            newsapi_api_key: env::var("NEWSAPI_API_KEY").ok(),
+            finnhub_api_key: Self::load_optional_string("FINNHUB_API_KEY"),
+            newsapi_api_key: Self::load_optional_string("NEWSAPI_API_KEY"),
         };
 
         let telegram = TelegramConfig {
@@ -216,6 +216,13 @@ impl Config {
                 matches!(trimmed.as_str(), "1" | "true" | "yes")
             })
             .unwrap_or(default)
+    }
+
+    fn load_optional_string(key: &str) -> Option<String> {
+        env::var(key)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
     }
 
     /// Helper: load per-symbol env variable, fallback to default
@@ -285,6 +292,25 @@ mod tests {
             ..valid
         };
         assert!(!disabled.is_ready());
+    }
+
+    #[test]
+    fn news_api_keys_are_trimmed_and_empty_values_are_dropped() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+
+        unsafe {
+            std::env::set_var("FINNHUB_API_KEY", "  finnhub-token  ");
+            std::env::set_var("NEWSAPI_API_KEY", "   ");
+        }
+
+        let config = Config::load();
+        assert_eq!(config.news.finnhub_api_key.as_deref(), Some("finnhub-token"));
+        assert!(config.news.newsapi_api_key.is_none());
+
+        unsafe {
+            std::env::remove_var("FINNHUB_API_KEY");
+            std::env::remove_var("NEWSAPI_API_KEY");
+        }
     }
 
     #[test]

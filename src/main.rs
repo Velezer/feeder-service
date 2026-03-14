@@ -647,6 +647,12 @@ async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
 
     let mut ticker = interval(Duration::from_secs(news_config.poll_interval_secs.max(30)));
 
+    if news_config.finnhub_api_key.is_none() && news_config.newsapi_api_key.is_none() {
+        eprintln!(
+            "[news] no provider API key configured; fetched will stay 0 until FINNHUB_API_KEY or NEWSAPI_API_KEY is set"
+        );
+    }
+
     loop {
         ticker.tick().await;
 
