@@ -100,8 +100,7 @@ impl BigMoveDetector {
                 signal: BigMoveSignal::None,
                 self_explanation_log: format!(
                     "[BIGMOVE][SELF_EXPLAIN] no consistent extreme pressure in last {} snapshots (threshold={:.1}%)",
-                    self.min_consecutive,
-                    self.pressure_threshold
+                    self.min_consecutive, self.pressure_threshold
                 ),
             };
         }
@@ -116,8 +115,7 @@ impl BigMoveDetector {
                 signal: BigMoveSignal::None,
                 self_explanation_log: format!(
                     "[BIGMOVE][SELF_EXPLAIN] pressure extreme but notional too small ({:.0} < {:.0})",
-                    avg_notional,
-                    self.min_total_notional
+                    avg_notional, self.min_total_notional
                 ),
             };
         }
@@ -130,9 +128,7 @@ impl BigMoveDetector {
                 },
                 self_explanation_log: format!(
                     "[BIGMOVE][SELF_EXPLAIN] bullish breakout: avg_pressure={:.1}% avg_notional={:.0} threshold={:.1}%",
-                    avg_pressure,
-                    avg_notional,
-                    self.pressure_threshold
+                    avg_pressure, avg_notional, self.pressure_threshold
                 ),
             }
         } else {
@@ -144,9 +140,7 @@ impl BigMoveDetector {
                 },
                 self_explanation_log: format!(
                     "[BIGMOVE][SELF_EXPLAIN] bearish breakout: avg_pressure={:.1}% avg_notional={:.0} threshold={:.1}%",
-                    bearish_pressure,
-                    avg_notional,
-                    self.pressure_threshold
+                    bearish_pressure, avg_notional, self.pressure_threshold
                 ),
             }
         }
@@ -184,7 +178,10 @@ mod tests {
             total_notional: 50_000.0,
         });
 
-        assert!(matches!(result.signal, BigMoveSignal::BullishBreakout { .. }));
+        assert!(matches!(
+            result.signal,
+            BigMoveSignal::BullishBreakout { .. }
+        ));
         assert!(result.self_explanation_log.contains("bullish breakout"));
     }
 

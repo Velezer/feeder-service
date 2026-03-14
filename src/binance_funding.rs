@@ -21,7 +21,10 @@ pub fn funding_rate_pct(raw_rate: &str) -> Option<f64> {
 }
 
 pub fn is_high_funding_rate(rate_pct: f64, threshold_pct: f64) -> bool {
-    rate_pct.is_finite() && threshold_pct.is_finite() && threshold_pct >= 0.0 && rate_pct.abs() >= threshold_pct
+    rate_pct.is_finite()
+        && threshold_pct.is_finite()
+        && threshold_pct >= 0.0
+        && rate_pct.abs() >= threshold_pct
 }
 
 #[cfg(test)]

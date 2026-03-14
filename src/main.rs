@@ -1,7 +1,7 @@
 use chrono::Utc;
 use feeder_service::binance::*;
-use feeder_service::binance_funding::*;
 use feeder_service::binance_depth::*;
+use feeder_service::binance_funding::*;
 use feeder_service::binance_kline::*;
 use feeder_service::config::{Config, NewsConfig};
 use feeder_service::correlation::engine::CorrelationEngine;
@@ -691,7 +691,11 @@ async fn process_funding_rate_update(
     };
     emit_correlation(correlation_engine.on_market_event(market_event), tx);
 
-    let side = if rate_pct >= 0.0 { "LONG_BIASED" } else { "SHORT_BIASED" };
+    let side = if rate_pct >= 0.0 {
+        "LONG_BIASED"
+    } else {
+        "SHORT_BIASED"
+    };
     let msg = format!(
         "[FUNDING] {} HIGH {} funding={:+.4}% threshold={:.4}% next={}",
         event.symbol.to_uppercase(),

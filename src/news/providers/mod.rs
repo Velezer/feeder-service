@@ -261,7 +261,10 @@ mod tests {
             newsapi: ProviderStatus::Disabled,
         };
 
-        assert_eq!(diagnostics.fetch_reason(0), "providers_returned_no_articles");
+        assert_eq!(
+            diagnostics.fetch_reason(0),
+            "providers_returned_no_articles"
+        );
         assert_eq!(diagnostics.fetch_reason(2), "ok");
     }
 
@@ -273,7 +276,10 @@ mod tests {
         };
 
         assert_eq!(diagnostics.failure_summary(), Some("one provider failed"));
-        assert_eq!(diagnostics.provider_state_summary(), "finnhub=ok;newsapi=failed");
+        assert_eq!(
+            diagnostics.provider_state_summary(),
+            "finnhub=ok;newsapi=failed"
+        );
         assert_eq!(diagnostics.fetch_reason(0), "partial_provider_failure");
     }
 }

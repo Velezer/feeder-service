@@ -1,10 +1,10 @@
 use feeder_service::binance::{calc_spike, parse_agg_trade};
-use feeder_service::binance_funding::{
-    funding_rate_pct, is_high_funding_rate, parse_funding_rate_update,
-};
 use feeder_service::binance_depth::{
     build_depth_streams, collect_big_levels, format_depth_levels, is_big_depth_update,
     parse_depth_update,
+};
+use feeder_service::binance_funding::{
+    funding_rate_pct, is_high_funding_rate, parse_funding_rate_update,
 };
 
 #[test]

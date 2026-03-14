@@ -1,6 +1,6 @@
 pub mod binance;
-pub mod binance_funding;
 pub mod binance_depth;
+pub mod binance_funding;
 pub mod binance_kline;
 pub mod config;
 pub mod correlation;

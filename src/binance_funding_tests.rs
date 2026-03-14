@@ -13,7 +13,8 @@ fn parse_funding_rate_from_combined_stream() {
 
 #[test]
 fn parse_funding_rate_rejects_other_payload_type() {
-    let msg = r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1710000000000,"s":"BTCUSDT"}}"#;
+    let msg =
+        r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","E":1710000000000,"s":"BTCUSDT"}}"#;
     assert!(parse_funding_rate_update(msg).is_none());
 }
 
