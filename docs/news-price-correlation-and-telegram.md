@@ -210,6 +210,27 @@ Checks:
 3. Check provider responses and auth quotas.
 4. Ensure `NEWS_POLL_INTERVAL_SECS` is not too large for your expectations.
 
+### D) `[news] fetched=0 inserted=0 pruned=0 db=news.sqlite` appears repeatedly
+
+The ingest loop now prints a reason and provider status so operators can immediately see why the counters are zero:
+
+```text
+[news] fetched=0 inserted=0 pruned=0 db=news.sqlite reason=<reason_code> providers=finnhub=<state>;newsapi=<state>
+```
+
+Reason codes:
+- `no_provider_api_key`: both providers are disabled because `FINNHUB_API_KEY` and `NEWSAPI_API_KEY` are unset/empty.
+- `provider_failed`: exactly one provider is configured and its fetch failed.
+- `providers_failed`: both configured providers failed in the current poll cycle.
+- `partial_provider_failure`: one provider failed but another provider succeeded.
+- `providers_returned_no_articles`: providers responded successfully but returned zero rows.
+- `ok`: at least one article was fetched.
+
+Provider states:
+- `disabled`: no API key configured for that provider.
+- `ok`: fetch call succeeded.
+- `failed`: fetch call errored (network/auth/rate-limit/etc.).
+
 ### C) Telegram auth or chat errors
 
 Symptoms:
