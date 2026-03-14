@@ -17,6 +17,9 @@ pub struct Config {
     pub big_depth_min_pressure_pct: f64,
     /// When `true`, depth streams are not subscribed and depth messages are not processed.
     pub disable_depth_stream: bool,
+    pub enable_funding_rate: bool,
+    pub funding_rate_alert_pct: f64,
+    pub funding_rate_cooldown_secs: u64,
     pub corr_min_move_pct: f64,
     pub corr_max_lag_seconds: u64,
     pub corr_min_confidence: f64,
@@ -119,6 +122,16 @@ impl Config {
             .unwrap_or(0.0);
 
         let disable_depth_stream = Self::load_bool("DISABLE_DEPTH_STREAM", false);
+        let enable_funding_rate = Self::load_bool("ENABLE_FUNDING_RATE", true);
+        let funding_rate_alert_pct = env::var("FUNDING_RATE_ALERT_PCT")
+            .ok()
+            .and_then(|v| v.parse::<f64>().ok())
+            .unwrap_or(0.10)
+            .max(0.0);
+        let funding_rate_cooldown_secs = env::var("FUNDING_RATE_COOLDOWN_SECS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(300);
 
         let corr_min_move_pct = env::var("CORR_MIN_MOVE_PCT")
             .ok()
@@ -200,6 +213,9 @@ impl Config {
             big_depth_min_notional,
             big_depth_min_pressure_pct,
             disable_depth_stream,
+            enable_funding_rate,
+            funding_rate_alert_pct,
+            funding_rate_cooldown_secs,
             corr_min_move_pct,
             corr_max_lag_seconds,
             corr_min_confidence,
@@ -259,6 +275,7 @@ mod tests {
 
         assert!(config.disable_depth_stream);
         assert!(config.telegram.enabled);
+        assert!(config.enable_funding_rate);
         assert_eq!(
             config.news_streams,
             vec!["alpha".to_string(), "beta".to_string()]
@@ -268,6 +285,29 @@ mod tests {
             std::env::remove_var("DISABLE_DEPTH_STREAM");
             std::env::remove_var("ENABLE_TELEGRAM_NOTIFIER");
             std::env::remove_var("NEWS_STREAMS");
+        }
+    }
+
+    #[test]
+    fn funding_rate_env_values_are_loaded_and_clamped() {
+        let _guard = env_lock().lock().expect("env lock poisoned");
+
+        unsafe {
+            std::env::set_var("ENABLE_FUNDING_RATE", "false");
+            std::env::set_var("FUNDING_RATE_ALERT_PCT", "-0.4");
+            std::env::set_var("FUNDING_RATE_COOLDOWN_SECS", "42");
+        }
+
+        let config = Config::load();
+
+        assert!(!config.enable_funding_rate);
+        assert_eq!(config.funding_rate_alert_pct, 0.0);
+        assert_eq!(config.funding_rate_cooldown_secs, 42);
+
+        unsafe {
+            std::env::remove_var("ENABLE_FUNDING_RATE");
+            std::env::remove_var("FUNDING_RATE_ALERT_PCT");
+            std::env::remove_var("FUNDING_RATE_COOLDOWN_SECS");
         }
     }
 

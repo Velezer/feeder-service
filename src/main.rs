@@ -1,5 +1,6 @@
 use chrono::Utc;
 use feeder_service::binance::*;
+use feeder_service::binance_funding::*;
 use feeder_service::binance_depth::*;
 use feeder_service::binance_kline::*;
 use feeder_service::config::{Config, NewsConfig};
@@ -52,6 +53,7 @@ async fn main() {
         config.corr_max_lag_seconds,
         config.corr_min_confidence,
     );
+    let mut last_funding_alert_ms: HashMap<String, u64> = HashMap::new();
 
     // Symbol list (lowercase used later)
     let symbols: Vec<String> = config
@@ -154,6 +156,16 @@ async fn main() {
         println!(
             "[INFO] Kline quant analysis is inactive (set ENABLE_KLINE_QUANT=true to enable)."
         );
+    }
+
+    if config.enable_funding_rate {
+        streams.extend(symbols.iter().map(|s| format!("{}@markPrice@1s", s)));
+        println!(
+            "[INFO] Funding rate detection enabled: threshold={:.3}% cooldown={}s",
+            config.funding_rate_alert_pct, config.funding_rate_cooldown_secs
+        );
+    } else {
+        println!("[INFO] Funding rate detection is disabled.");
     }
 
     let daily_offset_hours = std::env::var("TIME_RESISTANCE_DAILY_UTC_OFFSET_HOURS")
@@ -264,6 +276,24 @@ async fn main() {
             if let Some(news_event) = parse_news_event(payload) {
                 correlation_engine.ingest_news(news_event);
                 continue;
+            }
+
+            // 5) funding rate updates
+            if config.enable_funding_rate {
+                if let Some(funding) = parse_funding_rate_update(payload) {
+                    process_funding_rate_update(
+                        &funding,
+                        &config_map,
+                        &config,
+                        &mut last_funding_alert_ms,
+                        &mut correlation_engine,
+                        &tx,
+                        correlation_service.as_ref(),
+                        notifier.as_ref(),
+                    )
+                    .await;
+                    continue;
+                }
             }
 
             // Unknown / unhandled stream messages (optional logging controlled by env)
@@ -612,6 +642,85 @@ async fn process_kline_event(
     }
 }
 
+async fn process_funding_rate_update(
+    event: &feeder_service::binance_funding::FundingRateUpdate,
+    config_map: &HashMap<String, feeder_service::config::SymbolConfig>,
+    config: &Config,
+    last_funding_alert_ms: &mut HashMap<String, u64>,
+    correlation_engine: &mut CorrelationEngine,
+    tx: &broadcast::Sender<String>,
+    correlation_service: Option<&CorrelationService>,
+    notifier: &NotificationFanout,
+) {
+    let symbol = event.symbol.to_lowercase();
+    if !config_map.contains_key(&symbol) {
+        return;
+    }
+
+    let Some(rate_pct) = funding_rate_pct(&event.funding_rate) else {
+        return;
+    };
+
+    if !is_high_funding_rate(rate_pct, config.funding_rate_alert_pct) {
+        return;
+    }
+
+    let now = event.event_time;
+    let cooldown_ms = config.funding_rate_cooldown_secs.saturating_mul(1_000);
+    if let Some(previous) = last_funding_alert_ms.get(&symbol) {
+        let elapsed = now.saturating_sub(*previous);
+        if elapsed < cooldown_ms {
+            return;
+        }
+    }
+    last_funding_alert_ms.insert(symbol.clone(), now);
+
+    let market_event = MarketEvent {
+        symbol: symbol.clone(),
+        timestamp_ms: event.event_time,
+        kind: MarketEventKind::FundingRate,
+        move_pct: rate_pct.abs(),
+        notional: 0.0,
+        direction: if rate_pct > 0.0 {
+            1
+        } else if rate_pct < 0.0 {
+            -1
+        } else {
+            0
+        },
+    };
+    emit_correlation(correlation_engine.on_market_event(market_event), tx);
+
+    let side = if rate_pct >= 0.0 { "LONG_BIASED" } else { "SHORT_BIASED" };
+    let msg = format!(
+        "[FUNDING] {} HIGH {} funding={:+.4}% threshold={:.4}% next={}",
+        event.symbol.to_uppercase(),
+        side,
+        rate_pct,
+        config.funding_rate_alert_pct,
+        event.next_funding_time,
+    );
+
+    println!("{}", msg);
+    let _ = tx.send(msg);
+
+    build_and_send_enriched_payload(
+        tx,
+        correlation_service,
+        notifier,
+        "funding_rate",
+        &symbol,
+        event.event_time as i64,
+        json!({
+            "funding_rate_pct": rate_pct,
+            "funding_rate_threshold_pct": config.funding_rate_alert_pct,
+            "next_funding_time": event.next_funding_time,
+            "cooldown_secs": config.funding_rate_cooldown_secs,
+        }),
+    )
+    .await;
+}
+
 async fn build_and_send_enriched_payload(
     tx: &broadcast::Sender<String>,
     correlation_service: Option<&CorrelationService>,
@@ -694,6 +803,7 @@ fn emit_correlation(
         MarketEventKind::AggTrade => "aggTrade",
         MarketEventKind::DepthPressure => "depth",
         MarketEventKind::KlineClose => "kline",
+        MarketEventKind::FundingRate => "funding",
     };
 
     let corr_msg = format!(
