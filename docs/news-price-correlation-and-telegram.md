@@ -193,7 +193,8 @@ Symptoms:
 - `matched_news` empty despite obvious related headlines.
 
 Checks:
-1. Confirm `ENABLE_NEWS_INGEST=true` and provider API keys exist.
+1. Confirm `ENABLE_NEWS_INGEST=true` and at least one provider API key exists (`FINNHUB_API_KEY` or `NEWSAPI_API_KEY`).
+   - Keys containing only spaces behave as unset values and will not fetch news.
 2. Verify correlation windows are wide enough (`NEWS_CORRELATION_LOOKBACK_SECS`, `NEWS_CORRELATION_LOOKAHEAD_SECS`).
 3. Confirm symbol tagging contains the traded symbol (`BTC` vs `BTCUSDT` normalization expectations).
 4. Check event/news timestamps are in milliseconds and in expected wall-clock range.
