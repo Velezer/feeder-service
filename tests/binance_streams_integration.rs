@@ -1,4 +1,7 @@
 use feeder_service::binance::{calc_spike, parse_agg_trade};
+use feeder_service::binance_funding::{
+    funding_rate_pct, is_high_funding_rate, parse_funding_rate_update,
+};
 use feeder_service::binance_depth::{
     build_depth_streams, collect_big_levels, format_depth_levels, is_big_depth_update,
     parse_depth_update,
@@ -26,6 +29,24 @@ fn parse_agg_trade_rejects_depth_payload() {
 fn parse_agg_trade_rejects_invalid_json() {
     let payload = "this is not json";
     assert!(parse_agg_trade(payload).is_none());
+}
+
+#[test]
+fn parse_funding_rate_valid_payload() {
+    let payload = r#"{"stream":"btcusdt@markPrice@1s","data":{"e":"markPriceUpdate","E":1710000000100,"s":"BTCUSDT","p":"43000.5","i":"42990.0","P":"44000.0","r":"0.00120000","T":1710003600000}}"#;
+    let event = parse_funding_rate_update(payload).expect("expected funding rate payload");
+
+    assert_eq!(event.symbol, "BTCUSDT");
+    assert_eq!(event.event_time, 1710000000100);
+    assert_eq!(event.funding_rate, "0.00120000");
+}
+
+#[test]
+fn high_funding_rate_threshold_is_absolute() {
+    let pct = funding_rate_pct("-0.0025").expect("percentage conversion");
+    assert_eq!(pct, -0.25);
+    assert!(is_high_funding_rate(pct, 0.10));
+    assert!(!is_high_funding_rate(0.02, 0.10));
 }
 
 #[test]

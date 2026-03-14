@@ -18,6 +18,7 @@ It ingests trade streams, detects significant trade events, and distributes them
 - **Ingest Data**: Consume trade streams from external sources.
 - **Detect Spikes**: Identify trades exceeding configured thresholds.
   - Ignore invalid spike baselines (zero/negative/non-finite previous price) to avoid noisy or undefined outputs.
+- **Detect High Funding Rate**: Monitor Binance mark price updates and emit alerts when absolute funding rate exceeds configured thresholds.
 - **Broadcast Events**: Distribute filtered events to all subscribers.
 - **Log Events**: Maintain records of significant trades for monitoring.
   - Clamp computed processing delay to non-negative values for clock-skew or future timestamp inputs.

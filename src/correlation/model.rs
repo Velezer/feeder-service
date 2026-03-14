@@ -5,6 +5,7 @@ pub enum MarketEventKind {
     AggTrade,
     DepthPressure,
     KlineClose,
+    FundingRate,
 }
 
 #[derive(Debug, Clone)]
