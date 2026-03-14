@@ -304,7 +304,10 @@ mod tests {
         }
 
         let config = Config::load();
-        assert_eq!(config.news.finnhub_api_key.as_deref(), Some("finnhub-token"));
+        assert_eq!(
+            config.news.finnhub_api_key.as_deref(),
+            Some("finnhub-token")
+        );
         assert!(config.news.newsapi_api_key.is_none());
 
         unsafe {
