@@ -39,6 +39,12 @@ pub struct NewsConfig {
     pub newsapi_api_key: Option<String>,
 }
 
+impl NewsConfig {
+    pub fn has_provider_api_key(&self) -> bool {
+        self.finnhub_api_key.is_some() || self.newsapi_api_key.is_some()
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TelegramConfig {
     pub enabled: bool,
@@ -370,5 +376,24 @@ mod tests {
         unsafe {
             std::env::remove_var("TELEGRAM_API_BASE_URL");
         }
+    }
+
+    #[test]
+    fn news_config_reports_when_provider_keys_exist() {
+        let no_keys = super::NewsConfig {
+            enabled: true,
+            db_path: "news.sqlite".to_string(),
+            poll_interval_secs: 300,
+            retention_hours: 24,
+            finnhub_api_key: None,
+            newsapi_api_key: None,
+        };
+        assert!(!no_keys.has_provider_api_key());
+
+        let one_key = super::NewsConfig {
+            finnhub_api_key: Some("token".to_string()),
+            ..no_keys
+        };
+        assert!(one_key.has_provider_api_key());
     }
 }

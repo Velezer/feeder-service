@@ -218,6 +218,8 @@ The ingest loop now prints a reason and provider status so operators can immedia
 [news] fetched=0 inserted=0 pruned=0 db=news.sqlite reason=<reason_code> providers=finnhub=<state>;newsapi=<state>
 ```
 
+When both provider keys are missing, the loop short-circuits before any HTTP calls and logs `reason=no_provider_api_key` directly.
+
 Reason codes:
 - `no_provider_api_key`: both providers are disabled because `FINNHUB_API_KEY` and `NEWSAPI_API_KEY` are unset/empty.
 - `provider_failed`: exactly one provider is configured and its fetch failed.

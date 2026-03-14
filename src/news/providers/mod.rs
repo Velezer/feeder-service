@@ -218,6 +218,7 @@ fn parse_iso8601_timestamp(value: &str) -> Option<i64> {
 #[cfg(test)]
 mod tests {
     use super::{FetchDiagnostics, ProviderStatus};
+    use crate::config::NewsConfig;
 
     #[test]
     fn diagnostics_identify_disabled_providers() {
@@ -281,5 +282,26 @@ mod tests {
             "finnhub=ok;newsapi=failed"
         );
         assert_eq!(diagnostics.fetch_reason(0), "partial_provider_failure");
+    }
+
+    #[tokio::test]
+    async fn fetch_all_news_skips_network_when_no_api_keys_are_configured() {
+        let client = reqwest::Client::new();
+        let config = NewsConfig {
+            enabled: true,
+            db_path: "news.sqlite".to_string(),
+            poll_interval_secs: 300,
+            retention_hours: 24,
+            finnhub_api_key: None,
+            newsapi_api_key: None,
+        };
+
+        let (items, diagnostics) = super::fetch_all_news(&client, &config)
+            .await
+            .expect("fetch should succeed without network when keys are absent");
+
+        assert!(items.is_empty());
+        assert!(diagnostics.all_providers_disabled());
+        assert_eq!(diagnostics.fetch_reason(items.len()), "no_provider_api_key");
     }
 }
