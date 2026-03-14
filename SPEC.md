@@ -21,9 +21,9 @@ It ingests trade streams, detects significant trade events, and distributes them
 - **Broadcast Events**: Distribute filtered events to all subscribers.
 - **Log Events**: Maintain records of significant trades for monitoring.
   - Clamp computed processing delay to non-negative values for clock-skew or future timestamp inputs.
+  - Emit `[BIGMOVE][SELF_EXPLAIN]` decision logs for depth-based breakout detection so operators can trace why a signal fired or was suppressed.
 
 - **Telegram Delivery Behavior**: Telegram fanout is optional and non-blocking.
   - If Telegram is disabled or credentials are missing, stream processing remains active without notifier startup.
   - Delivery failures are logged and must not block websocket fanout or signal processing.
   - CI executes Telegram e2e in skip-safe mode by default, so pipeline success does not require Telegram secrets.
-
