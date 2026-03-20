@@ -765,20 +765,12 @@ async fn run_news_ingest_loop(news_config: NewsConfig) -> anyhow::Result<()> {
 
     if !news_config.has_provider_api_key() {
         eprintln!(
-            "[news] no provider API key configured; fetched will stay 0 until FINNHUB_API_KEY or NEWSAPI_API_KEY is set"
+            "[news] no FINNHUB_API_KEY/NEWSAPI_API_KEY configured; continuing with built-in RSS fallback providers"
         );
     }
 
     loop {
         ticker.tick().await;
-
-        if !news_config.has_provider_api_key() {
-            println!(
-                "[news] fetched=0 inserted=0 pruned=0 db={} reason=no_provider_api_key providers=finnhub=disabled;newsapi=disabled",
-                news_config.db_path,
-            );
-            continue;
-        }
 
         let (mut fetched, diagnostics) = fetch_all_news(&http, &news_config).await?;
         for item in &mut fetched {

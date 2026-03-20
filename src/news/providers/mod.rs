@@ -1,7 +1,14 @@
 use crate::news::types::NewsItem;
-use anyhow::Result;
+use anyhow::{Context, Result};
+use feed_rs::parser;
 use reqwest::Client;
 use serde::Deserialize;
+
+const DEFAULT_RSS_FEEDS: [&str; 3] = [
+    "https://www.coindesk.com/arc/outboundfeeds/rss/",
+    "https://cointelegraph.com/rss",
+    "https://decrypt.co/feed",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderStatus {
@@ -14,33 +21,47 @@ pub enum ProviderStatus {
 pub struct FetchDiagnostics {
     pub finnhub: ProviderStatus,
     pub newsapi: ProviderStatus,
+    pub rss: ProviderStatus,
 }
 
 impl FetchDiagnostics {
     pub fn all_providers_disabled(&self) -> bool {
-        self.finnhub == ProviderStatus::Disabled && self.newsapi == ProviderStatus::Disabled
+        self.finnhub == ProviderStatus::Disabled
+            && self.newsapi == ProviderStatus::Disabled
+            && self.rss == ProviderStatus::Disabled
     }
 
     pub fn failure_summary(&self) -> Option<&'static str> {
-        match (self.finnhub, self.newsapi) {
-            (ProviderStatus::Failed, ProviderStatus::Failed) => {
-                Some("all enabled providers failed")
+        let enabled = [self.finnhub, self.newsapi, self.rss]
+            .into_iter()
+            .filter(|status| *status != ProviderStatus::Disabled)
+            .count();
+        let failed = [self.finnhub, self.newsapi, self.rss]
+            .into_iter()
+            .filter(|status| *status == ProviderStatus::Failed)
+            .count();
+        let succeeded = [self.finnhub, self.newsapi, self.rss]
+            .into_iter()
+            .filter(|status| *status == ProviderStatus::Success)
+            .count();
+
+        match (enabled, failed, succeeded) {
+            (0, _, _) => None,
+            (_, failed_count, 0) if failed_count > 0 => Some("all enabled providers failed"),
+            (1, 1, 0) => Some("the configured provider failed"),
+            (_, failed_count, success_count) if failed_count > 0 && success_count > 0 => {
+                Some("one provider failed")
             }
-            (ProviderStatus::Failed, ProviderStatus::Disabled)
-            | (ProviderStatus::Disabled, ProviderStatus::Failed) => {
-                Some("the configured provider failed")
-            }
-            (ProviderStatus::Failed, ProviderStatus::Success)
-            | (ProviderStatus::Success, ProviderStatus::Failed) => Some("one provider failed"),
             _ => None,
         }
     }
 
     pub fn provider_state_summary(&self) -> String {
         format!(
-            "finnhub={};newsapi={}",
+            "finnhub={};newsapi={};rss={}",
             self.finnhub.as_label(),
-            self.newsapi.as_label()
+            self.newsapi.as_label(),
+            self.rss.as_label()
         )
     }
 
@@ -80,6 +101,7 @@ pub async fn fetch_all_news(
     let mut diagnostics = FetchDiagnostics {
         finnhub: ProviderStatus::Disabled,
         newsapi: ProviderStatus::Disabled,
+        rss: ProviderStatus::Success,
     };
 
     if let Some(api_key) = config.finnhub_api_key.as_deref() {
@@ -101,6 +123,14 @@ pub async fn fetch_all_news(
                 diagnostics.newsapi = ProviderStatus::Failed;
                 eprintln!("[news] newsapi fetch failed: {err}");
             }
+        }
+    }
+
+    match fetch_rss_news(client).await {
+        Ok(mut provider_items) => items.append(&mut provider_items),
+        Err(err) => {
+            diagnostics.rss = ProviderStatus::Failed;
+            eprintln!("[news] rss fetch failed: {err}");
         }
     }
 
@@ -209,6 +239,73 @@ async fn fetch_newsapi_news(client: &Client, api_key: &str) -> Result<Vec<NewsIt
     Ok(items)
 }
 
+pub async fn fetch_rss_news(client: &Client) -> Result<Vec<NewsItem>> {
+    let mut items = Vec::new();
+
+    for feed_url in DEFAULT_RSS_FEEDS {
+        let bytes = client
+            .get(feed_url)
+            .send()
+            .await
+            .with_context(|| format!("request feed {feed_url}"))?
+            .error_for_status()
+            .with_context(|| format!("http status for feed {feed_url}"))?
+            .bytes()
+            .await
+            .with_context(|| format!("read feed body {feed_url}"))?;
+
+        let feed = parser::parse(&bytes[..]).with_context(|| format!("parse feed {feed_url}"))?;
+        let fallback_source = feed
+            .title
+            .as_ref()
+            .map(|title| title.content.clone())
+            .unwrap_or_else(|| "rss".to_string());
+
+        for (index, entry) in feed.entries.into_iter().enumerate() {
+            let published_at = entry
+                .published
+                .or(entry.updated)
+                .map(|ts| ts.timestamp())
+                .unwrap_or(0);
+            let title = entry
+                .title
+                .as_ref()
+                .map(|value| value.content.clone())
+                .unwrap_or_default();
+            let summary = entry
+                .summary
+                .as_ref()
+                .map(|value| value.content.clone())
+                .unwrap_or_default();
+            let url = entry
+                .links
+                .iter()
+                .find(|link| link.rel.as_deref() == Some("alternate"))
+                .or_else(|| entry.links.first())
+                .map(|link| link.href.clone())
+                .unwrap_or_default();
+            let provider = fallback_source.clone();
+
+            if title.trim().is_empty() || url.trim().is_empty() {
+                continue;
+            }
+
+            items.push(NewsItem {
+                id: format!("rss-{provider}-{index}-{url}"),
+                source: provider,
+                published_at,
+                title,
+                summary,
+                url,
+                symbols: Vec::new(),
+                sentiment_score: None,
+            });
+        }
+    }
+
+    Ok(items)
+}
+
 fn parse_iso8601_timestamp(value: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(value)
         .ok()
@@ -221,19 +318,20 @@ mod tests {
     use crate::config::NewsConfig;
 
     #[test]
-    fn diagnostics_identify_disabled_providers() {
+    fn diagnostics_identify_disabled_api_providers_when_rss_is_available() {
         let diagnostics = FetchDiagnostics {
             finnhub: ProviderStatus::Disabled,
             newsapi: ProviderStatus::Disabled,
+            rss: ProviderStatus::Success,
         };
 
-        assert!(diagnostics.all_providers_disabled());
+        assert!(!diagnostics.all_providers_disabled());
         assert_eq!(diagnostics.failure_summary(), None);
         assert_eq!(
             diagnostics.provider_state_summary(),
-            "finnhub=disabled;newsapi=disabled"
+            "finnhub=disabled;newsapi=disabled;rss=ok"
         );
-        assert_eq!(diagnostics.fetch_reason(0), "no_provider_api_key");
+        assert_eq!(diagnostics.fetch_reason(3), "ok");
     }
 
     #[test]
@@ -241,18 +339,19 @@ mod tests {
         let diagnostics = FetchDiagnostics {
             finnhub: ProviderStatus::Failed,
             newsapi: ProviderStatus::Disabled,
+            rss: ProviderStatus::Disabled,
         };
 
         assert!(!diagnostics.all_providers_disabled());
         assert_eq!(
             diagnostics.failure_summary(),
-            Some("the configured provider failed")
+            Some("all enabled providers failed")
         );
         assert_eq!(
             diagnostics.provider_state_summary(),
-            "finnhub=failed;newsapi=disabled"
+            "finnhub=failed;newsapi=disabled;rss=disabled"
         );
-        assert_eq!(diagnostics.fetch_reason(0), "provider_failed");
+        assert_eq!(diagnostics.fetch_reason(0), "providers_failed");
     }
 
     #[test]
@@ -260,33 +359,37 @@ mod tests {
         let diagnostics = FetchDiagnostics {
             finnhub: ProviderStatus::Success,
             newsapi: ProviderStatus::Disabled,
+            rss: ProviderStatus::Success,
         };
 
         assert_eq!(
             diagnostics.fetch_reason(0),
             "providers_returned_no_articles"
         );
-        assert_eq!(diagnostics.fetch_reason(2), "ok");
     }
 
     #[test]
     fn diagnostics_identify_partial_failures() {
         let diagnostics = FetchDiagnostics {
-            finnhub: ProviderStatus::Success,
+            finnhub: ProviderStatus::Disabled,
             newsapi: ProviderStatus::Failed,
+            rss: ProviderStatus::Success,
         };
 
         assert_eq!(diagnostics.failure_summary(), Some("one provider failed"));
         assert_eq!(
             diagnostics.provider_state_summary(),
-            "finnhub=ok;newsapi=failed"
+            "finnhub=disabled;newsapi=failed;rss=ok"
         );
-        assert_eq!(diagnostics.fetch_reason(0), "partial_provider_failure");
+        assert_eq!(diagnostics.fetch_reason(5), "partial_provider_failure");
     }
 
-    #[tokio::test]
-    async fn fetch_all_news_skips_network_when_no_api_keys_are_configured() {
-        let client = reqwest::Client::new();
+    #[tokio::test(flavor = "current_thread")]
+    async fn fetch_all_news_uses_rss_without_api_keys() {
+        let client = reqwest::Client::builder()
+            .user_agent("feeder-service-news-test/0.1")
+            .build()
+            .expect("build client");
         let config = NewsConfig {
             enabled: true,
             db_path: "news.sqlite".to_string(),
@@ -298,10 +401,13 @@ mod tests {
 
         let (items, diagnostics) = super::fetch_all_news(&client, &config)
             .await
-            .expect("fetch should succeed without network when keys are absent");
+            .expect("fetch rss news without api keys");
 
-        assert!(items.is_empty());
-        assert!(diagnostics.all_providers_disabled());
-        assert_eq!(diagnostics.fetch_reason(items.len()), "no_provider_api_key");
+        assert!(
+            !items.is_empty(),
+            "rss fallback should return live articles"
+        );
+        assert_eq!(diagnostics.rss, ProviderStatus::Success);
+        assert_eq!(diagnostics.fetch_reason(items.len()), "ok");
     }
 }
