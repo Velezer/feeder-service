@@ -88,8 +88,8 @@ Below are all relevant runtime env vars for this feature area, including values 
 | `NEWS_DB_PATH` | `news.sqlite` | explicit volume path (e.g. `/data/news.sqlite`) | SQLite path used by ingest and correlation lookup. |
 | `NEWS_POLL_INTERVAL_SECS` | `300` | `300` initially, then `120` if needed | Provider polling frequency. |
 | `NEWS_RETENTION_HOURS` | `168` | `168` (7 days) | Retention cleanup window in hours. |
-| `FINNHUB_API_KEY` | unset | required if Finnhub enabled | Finnhub auth key. |
-| `NEWSAPI_API_KEY` | unset | required if NewsAPI enabled | NewsAPI auth key. |
+| `FINNHUB_API_KEY` | unset | optional | Finnhub auth key for premium API-backed headlines. |
+| `NEWSAPI_API_KEY` | unset | optional | NewsAPI auth key for premium API-backed headlines. |
 
 ### Correlation window controls
 
@@ -193,8 +193,9 @@ Symptoms:
 - `matched_news` empty despite obvious related headlines.
 
 Checks:
-1. Confirm `ENABLE_NEWS_INGEST=true` and at least one provider API key exists (`FINNHUB_API_KEY` or `NEWSAPI_API_KEY`).
-   - Keys containing only spaces behave as unset values and will not fetch news.
+1. Confirm `ENABLE_NEWS_INGEST=true`.
+   - Built-in RSS fallback providers continue fetching even when `FINNHUB_API_KEY` and `NEWSAPI_API_KEY` are unset.
+   - Keys containing only spaces behave as unset values and only disable the corresponding API-backed provider.
 2. Verify correlation windows are wide enough (`NEWS_CORRELATION_LOOKBACK_SECS`, `NEWS_CORRELATION_LOOKAHEAD_SECS`).
 3. Confirm symbol tagging contains the traded symbol (`BTC` vs `BTCUSDT` normalization expectations).
 4. Check event/news timestamps are in milliseconds and in expected wall-clock range.
@@ -215,13 +216,12 @@ Checks:
 The ingest loop now prints a reason and provider status so operators can immediately see why the counters are zero:
 
 ```text
-[news] fetched=0 inserted=0 pruned=0 db=news.sqlite reason=<reason_code> providers=finnhub=<state>;newsapi=<state>
+[news] fetched=12 inserted=8 pruned=0 db=news.sqlite reason=<reason_code> providers=finnhub=<state>;newsapi=<state>;rss=<state>
 ```
 
-When both provider keys are missing, the loop short-circuits before any HTTP calls and logs `reason=no_provider_api_key` directly.
+The ingest loop now keeps polling built-in RSS fallback providers even when both API-backed providers are unset.
 
 Reason codes:
-- `no_provider_api_key`: both providers are disabled because `FINNHUB_API_KEY` and `NEWSAPI_API_KEY` are unset/empty.
 - `provider_failed`: exactly one provider is configured and its fetch failed.
 - `providers_failed`: both configured providers failed in the current poll cycle.
 - `partial_provider_failure`: one provider failed but another provider succeeded.
@@ -229,9 +229,11 @@ Reason codes:
 - `ok`: at least one article was fetched.
 
 Provider states:
-- `disabled`: no API key configured for that provider.
+- `disabled`: no API key configured for that API-backed provider.
 - `ok`: fetch call succeeded.
 - `failed`: fetch call errored (network/auth/rate-limit/etc.).
+
+Built-in RSS fallback sources currently include CoinDesk, Cointelegraph, and Decrypt.
 
 ### C) Telegram auth or chat errors
 
